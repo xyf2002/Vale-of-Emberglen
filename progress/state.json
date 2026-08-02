@@ -1,0 +1,30 @@
+{
+  "goal": "A 5-minute playable vertical slice that captures the core fantasy of Palworld: a beautiful third-person world, charming creatures, meaningful interaction, and believable creature behaviour.",
+  "bar": "The real Palworld. A fresh critic is shown our capture beside an official Palworld frame — same shot type, same resolution, same format, labels stripped, order shuffled — and asked which one is the shipped commercial game. We are done when critics stop reliably picking correctly.",
+  "currentRound": "r00",
+  "currentState": "scaffold + harness verified",
+  "pickRate": null,
+  "openGaps": [
+    "Everything: the build is a stub baseline — noise terrain, capsule player, sphere creatures, flat lighting."
+  ],
+  "rounds": [
+    {
+      "id": "smoke",
+      "title": "Scaffold, capture harness, blind-A/B tooling",
+      "date": "2026-08-02",
+      "status": "done",
+      "summary": "Engine, system contracts and the deterministic capture harness are working. First run silently screenshotted the loading overlay and still reported OK — fixed, and a frame probe now fails any capture that is blank, uniform, or still showing an overlay.",
+      "improvements": [
+        "Fixed-timestep engine with a system registry; systems never import each other, so builder agents can own disjoint directories without conflicts",
+        "Deterministic seeded RNG and noise — same seed always produces the same world, which is what makes round-over-round A/B meaningful",
+        "Headless capture harness driving the game through the same input path a human uses",
+        "Matched-shot protocol: 6 staged stills + 2 motion strips",
+        "Blind A/B pack builder that normalises resolution/format/quality so critics judge the picture, not a technical tell",
+        "17 official Palworld reference stills acquired and readable by agents"
+      ],
+      "gaps": [
+        "Stub art across the board — this round only proves the measuring instruments work"
+      ]
+    }
+  ]
+}
