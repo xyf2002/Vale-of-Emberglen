@@ -1,8 +1,8 @@
 {
   "goal": "A 5-minute playable vertical slice that captures the core fantasy of Palworld: a beautiful third-person world, charming creatures, meaningful interaction, and believable creature behaviour.",
   "bar": "The real Palworld. A fresh critic is shown our capture beside an official Palworld frame — same shot type, same resolution, same format, labels stripped, order shuffled — and asked which one is the shipped commercial game. We are done when critics stop reliably picking correctly.",
-  "currentRound": "r08",
-  "currentState": "round 8 running — terrain material variety, the change both instruments independently named",
+  "currentRound": "r09",
+  "currentState": "round 9 running — four builders: terrain material, taming legibility, AI bound to real props, creature grounding",
   "pickRate": 0.0,
   "metrics": {
     "caption": "Objective guardrails, measured with tools/measure.py against the real reference frames. Not the bar — a critic's eye is — but they stop arguments about whether a change helped. Two bands were corrected in r08 after being measured from the reference rather than invented.",
@@ -52,26 +52,44 @@
     ]
   },
   "openGaps": [
-    "THE ONE CHANGE (named independently by both the blind critic and the objective measure): the ground is a single flat-coloured plane carrying zero information, and the grass billboards stop at a fixed radius, producing a visible ring or a hard three-band seam. Local contrast is 1.7–4.5 against the reference's 5.2–9.9 on every shot.",
-    "A large hard-edged fully opaque black blob in the portrait — likely a cast shadow rendered pure black, violating the reference rule that shadows are a cooler desaturated version of the lit colour, never black.",
-    "Dusk starfield is a hard-clipped rectangular patch that exposes the sky as a textured plane; night is a global multiply rather than lights that actually contribute.",
-    "Distant mountains are flat single-facet paper cutouts with no striation, snow line or shading break.",
-    "Creatures have no contact shadow, so they float; the reference anchors every creature with a tight dark ellipse.",
+    "PLAYTEST VERDICT: a stranger puts this down at five minutes. Not because it is broken — because it never tells them they are winning. The session ended with 0 creatures tamed while a Woolkin sat at trust 0.69, one berry from companionship, for 117 seconds.",
+    "MOTION VERDICT: 0 clean passes, 6 partial, 6 fail against the 12 aliveness criteria. The AI narrates causality it does not have — 'walking to the south-east lookout rock' when there is no rock; destinations are random terrain points named from a word list.",
+    "VISUAL VERDICT: 5/5 identified in blind A/B. The ground is one uniform value across 40-70% of every frame and the grass billboards stop at a fixed radius, leaving a visible ring or a hard three-band seam. Local contrast 1.7-4.5 vs reference 5.2-9.9.",
+    "Creatures cast no shadow at all — measured delta under their feet is ~0 against a 25-luma shadow under the player's. The contact-shadow system exists and renders nothing.",
+    "One idle loop: the same creature holds an identical silhouette for ~10s, and two creatures side by side share a pose and facing.",
+    "The world is a 120x90m diorama inside a 972x972m map. Run 100m from spawn and there is nothing.",
+    "offer burns berries into empty grass with no range gate — 4 of 6 berries wasted in one session, which can dead-end the core loop.",
     "Reference gap: only 1 of 17 official stills is early-game peaceful exploration, so interaction_feed has no honest comp and is judged on the art-direction rubric instead.",
-    "Reference gap: the trailer never shows a creature noticing an approaching player, so behaviour_approach has no fair comp either and is graded against the 12 written aliveness criteria."
+    "Reference gap: the trailer never shows a creature noticing an approaching player, so behaviour_approach has no fair comp and is graded against the 12 written criteria."
   ],
   "rounds": [
+    {
+      "id": "r09",
+      "title": "Four builders against three critic verdicts",
+      "date": "2026-08-03",
+      "status": "running",
+      "summary": "All three instruments reported and each named one highest-leverage change. Terrain material variety (blind critic + local-contrast measure agreed independently); taming legibility — surface the stage and the cost-to-finish where the mood word is now; bind AI destinations to real visible props so the good decisions reach the screen; and ground the creatures, which currently cast no shadow at all.",
+      "improvements": [
+        "Six instrument bugs found BY the critics and fixed: capture --only wiped the round mid-review; shots were never actually isolated, so a taming leaked into the 'creatures left completely alone' strip; the motion strips could not frame what they graded; playtest --minutes 5 ran only 163 simulated seconds; one reference image was the comp for two shots; the group shot framed the player instead of the group.",
+        "Motion strips rebuilt: subject-tracking camera near creature eye height, plus a third strip sampling every 0.25s for the acceleration-ramp criterion that coarser sampling cannot show."
+      ],
+      "gaps": []
+    },
     {
       "id": "r08",
       "title": "Terrain material variety — the change both instruments named",
       "date": "2026-08-03",
-      "status": "running",
+      "status": "done",
       "summary": "The blind critic (no access to any metric) and the objective local-contrast measure independently landed on the same defect: the ground is one uniform olive value across 40–70% of every frame, and the grass billboards end at a fixed radius against an untextured backing plane. Round 8 is slope- and noise-blended multi-material terrain, plus the specific artifacts the critic named.",
       "improvements": [
         "Blind A/B methodology fixed: pw_11 was being used as the comp for two different shots, so the critic spotted that both 'A' images were identical — knowing one was real gave away the other. Every shot now uses a distinct reference.",
         "creature_group shot rewritten: it was staged with the gameplay camera, which frames the player, so the 'group shot' contained three forty-pixel blobs in the left third with 60% empty grass. It now finds the creature cluster and frames it at readable scale."
       ],
-      "gaps": []
+      "gaps": [
+        "Blind A/B 5/5 identified — pick rate 0%",
+        "Motion rubric: 0 passes, 6 partial, 6 fail",
+        "Playtest: 0 tamed in five minutes; the richest system in the build only ever renders into a JSON field"
+      ]
     },
     {
       "id": "r07",

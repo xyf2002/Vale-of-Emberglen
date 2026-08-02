@@ -635,7 +635,7 @@ export function createBushes(ctx, T, rng) {
     }
     variants.push(mergeGeos(parts));
   }
-  const mat = new THREE.MeshBasicMaterial({ vertexColors: true });
+  const mat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
   const q = clamp(ctx.quality.grassDensity ?? 1, 0.3, 1.5);
   const lists = variants.map(() => []);
   const target = Math.round(300 * q);
