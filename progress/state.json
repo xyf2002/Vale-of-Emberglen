@@ -6,7 +6,8 @@
   "pickRate": null,
   "openGaps": [
     "Everything: the build is a stub baseline — noise terrain, capsule player, sphere creatures, flat lighting.",
-    "Reference gap: only 1 of 17 official stills is early-game peaceful exploration, so interaction_feed has no honest comp and is judged on the art-direction rubric instead."
+    "Reference gap: only 1 of 17 official stills is early-game peaceful exploration, so interaction_feed has no honest comp and is judged on the art-direction rubric instead.",
+    "Reference gap: the trailer never shows a creature noticing an approaching player, so behaviour_approach has no fair comp either and is graded against the 12 written aliveness criteria."
   ],
   "rounds": [
     {

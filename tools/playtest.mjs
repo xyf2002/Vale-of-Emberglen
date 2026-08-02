@@ -40,18 +40,18 @@ const BEATS = [
   { t: 6, label: 'Walks forward into the world.', act: (g) => { g.hold('forward', true); g.run(6); } },
   { t: 14, label: 'Sprints to cover ground.', act: (g) => { g.hold('sprint', true); g.run(8); g.hold('sprint', false); } },
   { t: 24, label: 'Stops. Turns to survey.', act: (g) => { g.hold('forward', false); g.look(600, 0); g.run(2.5); } },
-  { t: 30, label: 'Heads toward the nearest creature.', act: (g, s) => { steerToNearestCreature(g, s); g.run(8); } },
-  { t: 40, label: 'Approaches slowly.', act: (g, s) => { steerToNearestCreature(g, s); g.run(6); } },
+  { t: 30, label: 'Heads toward the nearest creature.', act: (g, s) => { window.__steer(g, s); g.run(8); } },
+  { t: 40, label: 'Approaches slowly.', act: (g, s) => { window.__steer(g, s); g.run(6); } },
   { t: 48, label: 'Tries the interact prompt.', act: (g) => { g.hold('forward', false); g.tap('offer'); g.run(2.5); } },
   { t: 52, label: 'Tries again.', act: (g) => { g.tap('offer'); g.run(2.5); g.tap('offer'); g.run(2.5); } },
   { t: 60, label: 'Jumps around — testing what the game lets them do.', act: (g) => { g.tap('jump'); g.run(1.4); g.tap('jump'); g.run(1.4); g.hold('left', true); g.run(2); g.hold('left', false); } },
   { t: 68, label: 'Wanders to find more creatures.', act: (g) => { g.hold('forward', true); g.hold('sprint', true); g.run(12); } },
   { t: 82, label: 'Finds somewhere to stand and watch.', act: (g) => { g.hold('forward', false); g.hold('sprint', false); g.run(10); } },
-  { t: 94, label: 'Approaches a second creature and feeds it.', act: (g, s) => { steerToNearestCreature(g, s); g.run(7); g.tap('offer'); g.run(2); g.tap('offer'); g.run(2); g.tap('offer'); g.run(2); } },
+  { t: 94, label: 'Approaches a second creature and feeds it.', act: (g, s) => { window.__steer(g, s); g.run(7); g.tap('offer'); g.run(2); g.tap('offer'); g.run(2); g.tap('offer'); g.run(2); } },
   { t: 108, label: 'Explores in a new direction.', act: (g) => { g.look(900, 0); g.hold('forward', true); g.hold('sprint', true); g.run(14); } },
   { t: 124, label: 'Stops to look at the view.', act: (g) => { g.hold('forward', false); g.hold('sprint', false); g.look(0, -140); g.run(4); g.look(0, 140); g.run(2); } },
   { t: 132, label: 'Keeps going.', act: (g) => { g.hold('forward', true); g.run(12); } },
-  { t: 146, label: 'Tries interacting with whatever is nearby.', act: (g, s) => { g.hold('forward', false); steerToNearestCreature(g, s); g.run(6); g.tap('interact'); g.run(1.5); g.tap('offer'); g.run(2.5); } },
+  { t: 146, label: 'Tries interacting with whatever is nearby.', act: (g, s) => { g.hold('forward', false); window.__steer(g, s); g.run(6); g.tap('interact'); g.run(1.5); g.tap('offer'); g.run(2.5); } },
   { t: 158, label: 'Settles in and watches the world for a while.', act: (g) => { g.run(20); } },
 ];
 
@@ -99,13 +99,17 @@ async function main() {
       throw new Error('init failed: ' + JSON.stringify(await page.evaluate(() => window.__game.errors)));
     }
 
+    // Beat bodies are stringified and evaluated inside the page, so any helper they
+    // call must exist in the page too — it is not in scope just because it is in this file.
+    await page.evaluate(`window.__steer = ${steerToNearestCreature.toString()}`);
+
     const budget = MINUTES * 60;
     let i = 0;
     for (const beat of BEATS) {
       if (beat.t > budget) break;
       const before = await page.evaluate(() => window.__game.state());
       await page.evaluate(`(${beat.act.toString()})(window.__game, ${JSON.stringify(before)})`);
-      await page.evaluate(`(${steerToNearestCreature.toString()}, window.__game.render())`);
+      await page.evaluate(() => window.__game.render());
       const file = path.join(outDir, `frame_${String(i).padStart(2, '0')}.png`);
       await page.screenshot({ path: file });
       const after = await page.evaluate(() => window.__game.state());
