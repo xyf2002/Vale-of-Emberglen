@@ -68,11 +68,35 @@ export const SHOTS = [
     id: 'creature_group',
     title: 'A few creatures sharing a meadow',
     intent: 'Aliveness in a still: are they arranged and posed like animals, or scattered like props?',
+    // The gameplay camera frames the PLAYER, so this shot used to show three
+    // forty-pixel blobs parked in the left third while 60% of frame was empty grass.
+    // A group shot has to actually contain its subject: find the creature cluster and
+    // frame that, at a distance where individuals read as characters.
     setup: (g) => {
       g.setTimeOfDay(0.34);
-      g.run(3);
       g.setCamera(null);
-      g.run(1.5);
+      g.run(3);
+      const s = g.state();
+      const list = (s.creatures && s.creatures.sample) || [];
+      const p = s.player.pos;
+      if (!list.length) { g.run(1); return; }
+      // anchor on the creature nearest the player, then include its neighbours
+      let anchor = list[0], best = 1e9;
+      for (const c of list) {
+        const d = (c.pos[0] - p[0]) * (c.pos[0] - p[0]) + (c.pos[1] - p[2]) * (c.pos[1] - p[2]);
+        if (d < best) { best = d; anchor = c; }
+      }
+      let cx = 0, cz = 0, n = 0;
+      for (const c of list) {
+        const d = Math.hypot(c.pos[0] - anchor.pos[0], c.pos[1] - anchor.pos[1]);
+        if (d < 16) { cx += c.pos[0]; cz += c.pos[1]; n++; }
+      }
+      cx /= n; cz /= n;
+      const gy = g.groundAt(cx, cz);
+      const ex = cx + 6.5, ez = cz + 6.0;
+      const ey = g.groundAt(ex, ez) + 1.9;
+      g.setCamera([ex, ey, ez], [cx, gy + 0.55, cz], 46);
+      g.run(0.8);
     },
   },
   {

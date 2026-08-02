@@ -59,30 +59,31 @@ code{background:#ffffff12;padding:1px 6px;border-radius:4px;font-size:12.5px}
 </header>
 <main>
   <div class="bar">
-    <div class="stat"><div class="k">Round</div><div class="v">r07</div></div>
-    <div class="stat"><div class="k">State</div><div class="v" style="font-size:15px">round 7 running — fixing the two measured dominant defects: dark ground albedo and featureless creatures</div></div>
+    <div class="stat"><div class="k">Round</div><div class="v">r08</div></div>
+    <div class="stat"><div class="k">State</div><div class="v" style="font-size:15px">round 8 running — terrain material variety, the change both instruments independently named</div></div>
     <div class="stat"><div class="k">Real-game pick rate</div><div class="v"><span class="meter"><i style="width:0%"></i></span><b>0%</b></div></div>
-    <div class="stat"><div class="k">Improvements landed</div><div class="v">13</div></div>
-    <div class="stat"><div class="k">Open gaps</div><div class="v">6</div></div>
+    <div class="stat"><div class="k">Improvements landed</div><div class="v">20</div></div>
+    <div class="stat"><div class="k">Open gaps</div><div class="v">7</div></div>
   </div>
 
   <h3>The bar</h3>
   <div class="verdict">The real Palworld. A fresh critic is shown our capture beside an official Palworld frame — same shot type, same resolution, same format, labels stripped, order shuffled — and asked which one is the shipped commercial game. We are done when critics stop reliably picking correctly.</div>
 
   <h3 style="margin-top:26px">Measured against the reference</h3>
-  <div class="dim" style="font-size:13px;margin-bottom:8px">Objective guardrails, measured with tools/measure.py. These are not the bar — a critic's eye is — but they stop arguments about whether a change helped.</div>
+  <div class="dim" style="font-size:13px;margin-bottom:8px">Objective guardrails, measured with tools/measure.py against the real reference frames. Not the bar — a critic's eye is — but they stop arguments about whether a change helped. Two bands were corrected in r08 after being measured from the reference rather than invented.</div>
   <table><tr><th>Guardrail</th><th>Ours</th><th>Reference target</th><th></th></tr>
-  <tr><td>ground/sky luminance ratio</td><td><b>0.29 – 0.37</b></td><td class="dim">0.63 – 0.96</td>
-    <td><span class="badge" style="--c:#ff8a8a">off target</span></td></tr><tr><td>mean saturation</td><td><b>0.18 – 0.26</b></td><td class="dim">0.26 – 0.32</td>
-    <td><span class="badge" style="--c:#ff8a8a">off target</span></td></tr><tr><td>distinct colours</td><td><b>500 – 700</b></td><td class="dim">850 – 1600</td>
-    <td><span class="badge" style="--c:#ff8a8a">off target</span></td></tr><tr><td>vista highlight clipping</td><td><b>3.25%</b></td><td class="dim">&lt; 0.5%</td>
-    <td><span class="badge" style="--c:#ff8a8a">off target</span></td></tr><tr><td>capture harness runs clean</td><td><b>yes, 6 shots + 2 strips</b></td><td class="dim">yes</td>
-    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>scene richness</td><td><b>143–170 draws, ~590k tris</b></td><td class="dim">&lt; 300 draws</td>
+  <tr><td>ground/sky luminance ratio</td><td><b>0.66 – 0.88</b></td><td class="dim">0.63 – 0.96</td>
+    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>highlight clipping</td><td><b>0.00%</b></td><td class="dim">&lt; 0.5%</td>
+    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>dusk mean luminance</td><td><b>52.6</b></td><td class="dim">≈50.7 (pw_16)</td>
+    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>local contrast / fine detail</td><td><b>1.7 – 4.5</b></td><td class="dim">5.2 – 9.9</td>
+    <td><span class="badge" style="--c:#ff8a8a">off target</span></td></tr><tr><td>distinct colours</td><td><b>168 – 595</b></td><td class="dim">420 – 1100</td>
+    <td><span class="badge" style="--c:#ff8a8a">off target</span></td></tr><tr><td>mean saturation</td><td><b>0.26 – 0.56</b></td><td class="dim">0.26 – 0.32</td>
+    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>scene richness</td><td><b>150–185 draws, ~1.2M tris</b></td><td class="dim">&lt; 300 draws</td>
     <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr>
   </table>
 
   <h3>Biggest remaining gaps</h3>
-  <ul><li class="gap">Ground is 2–3× too dark relative to sky in every gameplay-framed shot (ratio 0.29–0.37 vs Palworld's 0.63–0.96). Ruled out by experiment: shadows, ambient, sun elevation, exposure. The terrain/grass albedo is too dark at the source.</li><li class="gap">The hero creature renders as a featureless white sphere at portrait distance — no face, ears, wool lobes, limbs or contact shadow — despite the HUD silhouette for the same species having all of them.</li><li class="gap">Depth of field is so strong the portrait background is mush; the reference keeps backgrounds legible but low-detail.</li><li class="gap">dusk_mood is nearly black (mean 40.6, std 7.8 — barely above the harness blank-frame threshold).</li><li class="gap">Reference gap: only 1 of 17 official stills is early-game peaceful exploration, so interaction_feed has no honest comp and is judged on the art-direction rubric instead.</li><li class="gap">Reference gap: the trailer never shows a creature noticing an approaching player, so behaviour_approach has no fair comp either and is graded against the 12 written aliveness criteria.</li></ul>
+  <ul><li class="gap">THE ONE CHANGE (named independently by both the blind critic and the objective measure): the ground is a single flat-coloured plane carrying zero information, and the grass billboards stop at a fixed radius, producing a visible ring or a hard three-band seam. Local contrast is 1.7–4.5 against the reference's 5.2–9.9 on every shot.</li><li class="gap">A large hard-edged fully opaque black blob in the portrait — likely a cast shadow rendered pure black, violating the reference rule that shadows are a cooler desaturated version of the lit colour, never black.</li><li class="gap">Dusk starfield is a hard-clipped rectangular patch that exposes the sky as a textured plane; night is a global multiply rather than lights that actually contribute.</li><li class="gap">Distant mountains are flat single-facet paper cutouts with no striation, snow line or shading break.</li><li class="gap">Creatures have no contact shadow, so they float; the reference anchors every creature with a tight dark ellipse.</li><li class="gap">Reference gap: only 1 of 17 official stills is early-game peaceful exploration, so interaction_feed has no honest comp and is judged on the art-direction rubric instead.</li><li class="gap">Reference gap: the trailer never shows a creature noticing an approaching player, so behaviour_approach has no fair comp either and is graded against the 12 written aliveness criteria.</li></ul>
 
   <h3 style="margin-top:30px">Rounds</h3>
   
@@ -142,22 +143,38 @@ code{background:#ffffff12;padding:1px 6px;border-radius:4px;font-size:12.5px}
     </div>
   </details>
   <details class="round" >
-    <summary>r07 — Fix the two measured dominant defects <span class="badge" style="--c:#e8b45c">running</span>
+    <summary>r07 — Fix the two measured dominant defects — both turned out to be real bugs <span class="badge" style="--c:#7fd18b">complete</span>
       <span style="margin-left:auto;font-weight:400;color:var(--dim);font-size:13px">2026-08-02</span></summary>
     <div class="body">
-      <div class="verdict">Two builders with hard numeric targets rather than adjectives. Look-dev owns the ground/sky ratio, saturation, clipping and the over-strong depth of field; the creature builder owns turning a blank white sphere back into something charming. Both were handed the list of causes already ruled out by experiment so they don't re-investigate them.</div>
+      <div class="verdict">Ground albedo and creature rendering, both diagnosed to root cause rather than tuned. Four compounding defects made the ground dark: a linear/sRGB colour-space error that multiplied terrain albedo by 0.36 before any light hit it; grass instance normals rotated near-horizontal by the inverse-transpose of a non-uniform blade scale; a dusk grade applying contrast around a pivot above the tone-mapped signal, driving every pixel negative; and wind amplitude in world metres laying blades over by 57 degrees. The creature was a blank sphere because src/creatures/index.js was still the STUB — all the real craft existed and was imported by nothing.</div>
       <div class="cols">
-        <div><h3>Improvements landed</h3><ul><li>Portrait staging fixed: the camera was placed at the player's ground height, which buried it inside any rising terrain — now each object is staged against the ground it actually stands on</li><li>Capture API exposes scene internals and groundAt(), so diagnostics measure the scene instead of arguing about it</li><li>tools/measure.py added: ground/sky ratio, saturation, clipping, palette width and local contrast against the real reference</li></ul></div>
-        <div><h3>Gaps found by critics</h3><ul><li class="dim">—</li></ul></div>
+        <div><h3>Improvements landed</h3><ul><li>Ground/sky luminance ratio 0.31 → 0.66–0.88, inside the reference band on all four priority shots</li><li>Highlight clipping 3.25% → 0.00%</li><li>Dusk mean luminance 40.6 → 52.6, against the reference night frame's 50.7</li><li>Creatures now render with wool lobes, oversized dark-tipped ears, upright horns, and a drawn face with iris and specular dot — the reference brief realised</li><li>Guardrails corrected against the reference instead of invented: the colour-count band was wrong, and ground/sky ratio is a daylight-only number so night shots are exempt rather than permanently flagged</li><li>Portrait staging fixed: the camera was placed at the player's ground height, which buried it inside any rising terrain — now each object is staged against the ground it actually stands on</li><li>Capture API exposes scene internals and groundAt(), so diagnostics measure the scene instead of arguing about it</li><li>tools/measure.py added: ground/sky ratio, saturation, clipping, palette width and local contrast against the real reference</li></ul></div>
+        <div><h3>Gaps found by critics</h3><ul><li class="gap">Local contrast is now the dominant measurable gap: 1.7–4.5 vs the reference 5.2–9.9</li><li class="gap">Blind A/B still 0/5 — the critic identified every frame, though the reasons shifted from gross exposure faults to specific material and composition problems</li></ul></div>
       </div>
-      
+      <h3>Critic verdicts</h3><table><tr><th>Shot</th><th>Picked as real</th><th>Note</th></tr>
+        <tr><td>creature_portrait</td><td><span class="dim">reference</span></td><td class="dim">closest to shipping; killed by a hard black blob artifact and flat-shaded wool with almost no terminator</td></tr><tr><td>overshoulder_meadow</td><td><span class="dim">reference</span></td><td class="dim">best-lit shot, real cast shadow; three unblended horizontal bands across the midground</td></tr><tr><td>vista_golden</td><td><span class="dim">reference</span></td><td class="dim">good compositional intent, empty midground, visible grass cutoff ring</td></tr><tr><td>creature_group</td><td><span class="dim">reference</span></td><td class="dim">did not contain its own subject — camera framed the player (since fixed)</td></tr><tr><td>dusk_mood</td><td><span class="dim">reference</span></td><td class="dim">hard-clipped rectangular starfield; night applied as a global multiply, no light actually contributes</td></tr></table>
       <h3>Frames</h3><div class="grid"><div class="shot"><img loading="lazy" src="../captures/r07/creature_portrait.png" alt="creature_portrait.png">
         <div class="cap"><span>creature_portrait</span><span>149 draws</span></div></div></div>
       
     </div>
   </details>
+  <details class="round" >
+    <summary>r08 — Terrain material variety — the change both instruments named <span class="badge" style="--c:#e8b45c">running</span>
+      <span style="margin-left:auto;font-weight:400;color:var(--dim);font-size:13px">2026-08-03</span></summary>
+    <div class="body">
+      <div class="verdict">The blind critic (no access to any metric) and the objective local-contrast measure independently landed on the same defect: the ground is one uniform olive value across 40–70% of every frame, and the grass billboards end at a fixed radius against an untextured backing plane. Round 8 is slope- and noise-blended multi-material terrain, plus the specific artifacts the critic named.</div>
+      <div class="cols">
+        <div><h3>Improvements landed</h3><ul><li>Blind A/B methodology fixed: pw_11 was being used as the comp for two different shots, so the critic spotted that both 'A' images were identical — knowing one was real gave away the other. Every shot now uses a distinct reference.</li><li>creature_group shot rewritten: it was staged with the gameplay camera, which frames the player, so the 'group shot' contained three forty-pixel blobs in the left third with 60% empty grass. It now finds the creature cluster and frames it at readable scale.</li></ul></div>
+        <div><h3>Gaps found by critics</h3><ul><li class="dim">—</li></ul></div>
+      </div>
+      
+      <h3>Frames</h3><div class="grid"><div class="shot"><img loading="lazy" src="../captures/r08/creature_group.png" alt="creature_group.png">
+        <div class="cap"><span>creature_group</span><span>165 draws</span></div></div></div>
+      
+    </div>
+  </details>
 </main>
-<footer>Regenerate with <code>node tools/progress.mjs</code> · captures via <code>node tools/capture.mjs --round &lt;id&gt;</code> · generated 2026-08-02T22:07:30.540Z</footer>
+<footer>Regenerate with <code>node tools/progress.mjs</code> · captures via <code>node tools/capture.mjs --round &lt;id&gt;</code> · generated 2026-08-02T23:15:50.766Z</footer>
 <div id="lb"><img></div>
 <script>
 const lb=document.getElementById('lb'),lbi=lb.querySelector('img');
