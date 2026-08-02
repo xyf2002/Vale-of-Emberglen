@@ -1,13 +1,23 @@
 {
   "goal": "A 5-minute playable vertical slice that captures the core fantasy of Palworld: a beautiful third-person world, charming creatures, meaningful interaction, and believable creature behaviour.",
   "bar": "The real Palworld. A fresh critic is shown our capture beside an official Palworld frame — same shot type, same resolution, same format, labels stripped, order shuffled — and asked which one is the shipped commercial game. We are done when critics stop reliably picking correctly.",
-  "currentRound": "r00",
-  "currentState": "scaffold + harness verified",
+  "currentRound": "r01",
+  "currentState": "round 1 building — 9 system builders + integration",
   "pickRate": null,
   "openGaps": [
-    "Everything: the build is a stub baseline — noise terrain, capsule player, sphere creatures, flat lighting."
+    "Everything: the build is a stub baseline — noise terrain, capsule player, sphere creatures, flat lighting.",
+    "Reference gap: only 1 of 17 official stills is early-game peaceful exploration, so interaction_feed has no honest comp and is judged on the art-direction rubric instead."
   ],
   "rounds": [
+    {
+      "id": "r01",
+      "title": "Nine systems built in parallel, then integrated",
+      "date": "2026-08-02",
+      "status": "running",
+      "summary": "Nine builder agents with fresh context, each owning one disjoint system directory, each required to read the art-direction brief, look at the real reference screenshots, and verify against their own rendered output. Then an integration pass to make nine independent parts cohere.",
+      "improvements": [],
+      "gaps": []
+    },
     {
       "id": "smoke",
       "title": "Scaffold, capture harness, blind-A/B tooling",

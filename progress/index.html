@@ -59,18 +59,18 @@ code{background:#ffffff12;padding:1px 6px;border-radius:4px;font-size:12.5px}
 </header>
 <main>
   <div class="bar">
-    <div class="stat"><div class="k">Round</div><div class="v">r00</div></div>
-    <div class="stat"><div class="k">State</div><div class="v" style="font-size:15px">scaffold + harness verified</div></div>
+    <div class="stat"><div class="k">Round</div><div class="v">r01</div></div>
+    <div class="stat"><div class="k">State</div><div class="v" style="font-size:15px">round 1 building — 9 system builders + integration</div></div>
     <div class="stat"><div class="k">Real-game pick rate</div><div class="v"><span class="dim">—</span></div></div>
     <div class="stat"><div class="k">Improvements landed</div><div class="v">6</div></div>
-    <div class="stat"><div class="k">Open gaps</div><div class="v">1</div></div>
+    <div class="stat"><div class="k">Open gaps</div><div class="v">2</div></div>
   </div>
 
   <h3>The bar</h3>
   <div class="verdict">The real Palworld. A fresh critic is shown our capture beside an official Palworld frame — same shot type, same resolution, same format, labels stripped, order shuffled — and asked which one is the shipped commercial game. We are done when critics stop reliably picking correctly.</div>
 
   <h3>Biggest remaining gaps</h3>
-  <ul><li class="gap">Everything: the build is a stub baseline — noise terrain, capsule player, sphere creatures, flat lighting.</li></ul>
+  <ul><li class="gap">Everything: the build is a stub baseline — noise terrain, capsule player, sphere creatures, flat lighting.</li><li class="gap">Reference gap: only 1 of 17 official stills is early-game peaceful exploration, so interaction_feed has no honest comp and is judged on the art-direction rubric instead.</li></ul>
 
   <h3 style="margin-top:30px">Rounds</h3>
   
@@ -94,8 +94,22 @@ code{background:#ffffff12;padding:1px 6px;border-radius:4px;font-size:12.5px}
       
     </div>
   </details>
+  <details class="round" >
+    <summary>r01 — Nine systems built in parallel, then integrated <span class="badge" style="--c:#e8b45c">running</span>
+      <span style="margin-left:auto;font-weight:400;color:var(--dim);font-size:13px">2026-08-02</span></summary>
+    <div class="body">
+      <div class="verdict">Nine builder agents with fresh context, each owning one disjoint system directory, each required to read the art-direction brief, look at the real reference screenshots, and verify against their own rendered output. Then an integration pass to make nine independent parts cohere.</div>
+      <div class="cols">
+        <div><h3>Improvements landed</h3><ul><li class="dim">—</li></ul></div>
+        <div><h3>Gaps found by critics</h3><ul><li class="dim">—</li></ul></div>
+      </div>
+      
+      <p class="dim">no captures yet</p>
+      
+    </div>
+  </details>
 </main>
-<footer>Regenerate with <code>node tools/progress.mjs</code> · captures via <code>node tools/capture.mjs --round &lt;id&gt;</code> · generated 2026-08-02T19:29:48.920Z</footer>
+<footer>Regenerate with <code>node tools/progress.mjs</code> · captures via <code>node tools/capture.mjs --round &lt;id&gt;</code> · generated 2026-08-02T19:36:00.591Z</footer>
 <div id="lb"><img></div>
 <script>
 const lb=document.getElementById('lb'),lbi=lb.querySelector('img');
