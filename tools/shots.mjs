@@ -13,15 +13,19 @@
 export const SHOTS = [
   {
     id: 'vista_golden',
-    title: 'Establishing vista, golden hour',
-    intent: 'Does the world look like somewhere you want to walk into? Depth, silhouette, light.',
+    // Deliberately NOT golden hour: the only fair reference comp (pw_11) is a bright
+    // daylight ground-level vista. Matched-shot means matching the reference, not
+    // picking the lighting that flatters us most.
+    title: 'Establishing vista, bright day, ground level',
+    intent: 'Does the world look like somewhere you want to walk into? Three depth planes, aerial perspective, a landmark at 1-3km.',
     setup: (g) => {
-      g.setTimeOfDay(0.74);
-      g.place(0, 0, 0);
+      g.setTimeOfDay(0.60);
+      g.setCamera(null);
       g.run(1.5);
       const s = g.state();
       const [x, y, z] = s.player.pos;
-      g.setCamera([x - 26, y + 17, z + 30], [x + 30, y + 2, z - 40], 46);
+      // eye height, near-level pitch — per reference observation #10
+      g.setCamera([x - 5, y + 1.7, z + 7], [x + 34, y + 3.5, z - 46], 62);
       g.run(0.6);
     },
   },
@@ -43,11 +47,14 @@ export const SHOTS = [
     intent: 'Charm test. Silhouette, face, material, shading. This is the single hardest shot to fake.',
     setup: (g) => {
       g.setTimeOfDay(0.63);
-      const c = g.spawnCreature('woolkin', 12, 12);
-      g.run(0.4);
+      g.setCamera(null);
+      g.run(0.3);
       const s = g.state();
-      const p = s.creatures?.sample?.[0];
-      g.setCamera([13.6, (p ? 0 : 0) + 1.5, 14.4], [12, 0.9, 12], 40);
+      const [px, py, pz] = s.player.pos;   // use the player's ground height, not y=0
+      g.spawnCreature('woolkin', px + 3, pz + 3);
+      g.run(0.5);
+      // longer lens, creature filling 55-75% of frame height — per reference observation #11
+      g.setCamera([px + 4.5, py + 1.05, pz + 4.8], [px + 3, py + 0.5, pz + 3], 38);
       g.run(0.8);
     },
   },

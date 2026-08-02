@@ -1,0 +1,8 @@
+{
+  "_note": "Fairest reference comp per matched shot, chosen by the reference curator from the 17 official stills. interaction_feed is deliberately absent: nothing in the official set shows peaceful player-creature interaction, so forcing a comp would produce a dishonest comparison. It is judged on the feeling question and the art-direction rubric instead.",
+  "vista_golden": ["reference/palworld/pw_11.jpg", "reference/palworld/pw_02.jpg"],
+  "overshoulder_meadow": ["reference/palworld/pw_11.jpg", "reference/palworld/pw_10.jpg"],
+  "creature_portrait": ["reference/palworld/pw_15.jpg", "reference/palworld/pw_12.jpg"],
+  "creature_group": ["reference/palworld/pw_07.jpg", "reference/palworld/pw_09.jpg"],
+  "dusk_mood": ["reference/palworld/pw_16.jpg", "reference/palworld/pw_09.jpg"]
+}
