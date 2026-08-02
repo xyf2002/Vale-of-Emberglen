@@ -115,6 +115,13 @@ code{background:#ffffff12;padding:1px 6px;border-radius:4px;font-size:12.5px}
   <h3>The bar</h3>
   <div class="verdict">${esc(state.bar)}</div>
 
+  ${state.metrics ? `<h3 style="margin-top:26px">Measured against the reference</h3>
+  <div class="dim" style="font-size:13px;margin-bottom:8px">${esc(state.metrics.caption)}</div>
+  <table><tr><th>Guardrail</th><th>Ours</th><th>Reference target</th><th></th></tr>
+  ${state.metrics.rows.map((m) => `<tr><td>${esc(m.name)}</td><td><b>${esc(m.ours)}</b></td><td class="dim">${esc(m.target)}</td>
+    <td>${m.status === 'pass' ? '<span class="badge" style="--c:#7fd18b">pass</span>' : '<span class="badge" style="--c:#ff8a8a">off target</span>'}</td></tr>`).join('')}
+  </table>` : ''}
+
   <h3>Biggest remaining gaps</h3>
   <ul>${(state.openGaps ?? []).map((g) => `<li class="gap">${esc(g)}</li>`).join('') || '<li class="dim">none recorded yet</li>'}</ul>
 

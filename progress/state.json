@@ -1,29 +1,55 @@
 {
   "goal": "A 5-minute playable vertical slice that captures the core fantasy of Palworld: a beautiful third-person world, charming creatures, meaningful interaction, and believable creature behaviour.",
   "bar": "The real Palworld. A fresh critic is shown our capture beside an official Palworld frame — same shot type, same resolution, same format, labels stripped, order shuffled — and asked which one is the shipped commercial game. We are done when critics stop reliably picking correctly.",
-  "currentRound": "r02",
-  "currentState": "round 2 — rendering pipeline: fix overexposure, zero shadow structure, flat desaturated grade",
+  "currentRound": "r07",
+  "currentState": "round 7 running — fixing the two measured dominant defects: dark ground albedo and featureless creatures",
   "pickRate": 0.0,
+  "metrics": {
+    "caption": "Objective guardrails, measured with tools/measure.py. These are not the bar — a critic's eye is — but they stop arguments about whether a change helped.",
+    "rows": [
+      { "name": "ground/sky luminance ratio", "ours": "0.29 – 0.37", "target": "0.63 – 0.96", "status": "fail" },
+      { "name": "mean saturation", "ours": "0.18 – 0.26", "target": "0.26 – 0.32", "status": "fail" },
+      { "name": "distinct colours", "ours": "500 – 700", "target": "850 – 1600", "status": "fail" },
+      { "name": "vista highlight clipping", "ours": "3.25%", "target": "< 0.5%", "status": "fail" },
+      { "name": "capture harness runs clean", "ours": "yes, 6 shots + 2 strips", "target": "yes", "status": "pass" },
+      { "name": "scene richness", "ours": "143–170 draws, ~590k tris", "target": "< 300 draws", "status": "pass" }
+    ]
+  },
   "openGaps": [
-    "Rendering pipeline blows the frame out: up to 47% clipped highlights, darkest pixel ~90-96/255 (no shadow structure anywhere), flat desaturated grade (~500-700 unique colors vs Palworld's 850-1600), low edge detail in creature portrait and dusk mid-ground. Every one of our 5 comp shots was correctly identified as NOT the commercial game.",
+    "Ground is 2–3× too dark relative to sky in every gameplay-framed shot (ratio 0.29–0.37 vs Palworld's 0.63–0.96). Ruled out by experiment: shadows, ambient, sun elevation, exposure. The terrain/grass albedo is too dark at the source.",
+    "The hero creature renders as a featureless white sphere at portrait distance — no face, ears, wool lobes, limbs or contact shadow — despite the HUD silhouette for the same species having all of them.",
+    "Depth of field is so strong the portrait background is mush; the reference keeps backgrounds legible but low-detail.",
+    "dusk_mood is nearly black (mean 40.6, std 7.8 — barely above the harness blank-frame threshold).",
     "Reference gap: only 1 of 17 official stills is early-game peaceful exploration, so interaction_feed has no honest comp and is judged on the art-direction rubric instead.",
     "Reference gap: the trailer never shows a creature noticing an approaching player, so behaviour_approach has no fair comp either and is graded against the 12 written aliveness criteria."
   ],
   "rounds": [
     {
-      "id": "r02",
-      "title": "Rendering pipeline: kill the blown-out wash, restore shadow structure and colour",
+      "id": "r07",
+      "title": "Fix the two measured dominant defects",
       "date": "2026-08-02",
       "status": "running",
-      "summary": "Blind critic B (pixel-forensic, 5/5 correct) proved our frames are destroyed by the render chain: 47% clipped highlights, no shadows (darkest pixel 96/255), flat palette (500-700 colors vs 850-1600), low detail. Runtime diagnostics show the scene is rich (142 draws, 586k tris, 8860 grass blades) and post is enabled with ACES — so the image is being wrecked between scene render and final pixels. Suspects: colour-space double-encoding (SRGB output + HalfFloat RT + manual ACES/linearToSRGB re-applied), sun intensity 3.52 in physical-light units, and shadow maps not reaching materials. A deep builder owns the fix and must prove it with forensic deltas, not opinion.",
-      "improvements": [],
-      "gaps": [],
-      "verdicts": [
-        { "shot": "vista_golden", "oursPicked": true, "note": "critic identified ours 5/5: blown-out 47% clipped, zero shadow structure" },
-        { "shot": "overshoulder_meadow", "oursPicked": true, "note": "701 colors / 0.207 sat vs ref 1584 / 0.304" },
-        { "shot": "creature_portrait", "oursPicked": true, "note": "37% clipped, creature reads as smooth untextured blob (edge 1.9 vs 9.8)" },
-        { "shot": "creature_group", "oursPicked": true, "note": "705 colors / 0.181 sat / 16.5% blown" },
-        { "shot": "dusk_mood", "oursPicked": true, "note": "511 colors, banded sky, empty mid-ground" }
+      "summary": "Two builders with hard numeric targets rather than adjectives. Look-dev owns the ground/sky ratio, saturation, clipping and the over-strong depth of field; the creature builder owns turning a blank white sphere back into something charming. Both were handed the list of causes already ruled out by experiment so they don't re-investigate them.",
+      "improvements": [
+        "Portrait staging fixed: the camera was placed at the player's ground height, which buried it inside any rising terrain — now each object is staged against the ground it actually stands on",
+        "Capture API exposes scene internals and groundAt(), so diagnostics measure the scene instead of arguing about it",
+        "tools/measure.py added: ground/sky ratio, saturation, clipping, palette width and local contrast against the real reference"
+      ],
+      "gaps": []
+    },
+    {
+      "id": "r02–r06",
+      "title": "Rendering pipeline iterations",
+      "date": "2026-08-02",
+      "status": "done",
+      "summary": "Five rounds chasing the washed-out image. Honest outcome: r04, r05 and r06 are within 1% of each other on every tonal statistic — the last three rounds did not measurably change the picture. That plateau is what prompted switching from adjective-driven briefs to measured targets with hypotheses pre-eliminated by experiment.",
+      "improvements": [
+        "Overexposure from the earlier rounds was largely corrected — highlight clipping fell from 47% to 3.25%",
+        "Scene became genuinely content-rich: 8860 grass blades, 266 trees, 306 rocks, 14 creatures at 143–170 draw calls"
+      ],
+      "gaps": [
+        "Three consecutive rounds produced no measurable change — the defect was never actually localised, only guessed at",
+        "The real cause (ground albedo, not exposure or shadows) went unidentified until it was isolated by controlled experiment"
       ]
     },
     {
@@ -31,20 +57,20 @@
       "title": "Nine systems built in parallel, then integrated",
       "date": "2026-08-02",
       "status": "done",
-      "summary": "Nine builder agents with fresh context, each owning one disjoint system directory, each required to read the art-direction brief, look at the real reference screenshots, and verify against their own rendered output. Then an integration pass to make nine independent parts cohere. Integration capture succeeded (6 shots + 2 strips, all frames passed the probe), but blind A/B against real Palworld frames was 0/5: the rendering pipeline washes the image out.",
+      "summary": "Nine builder agents with fresh context, each owning one disjoint system directory, each required to read the art-direction brief, look at the real reference screenshots, and verify against their own rendered output. Integration capture succeeded — but the blind A/B verdict was 0/5.",
       "improvements": [
-        "All nine systems (world, sky, player, creatures, ai, interaction, ui, audio, post) built and integrated; capture reports OK with 143-170 draws and 590-830k triangles",
-        "Runtime diagnostics prove the scene is content-rich (8860 grass blades, 266 trees, 306 rocks, 14 creatures) and the post chain runs with zero failures"
+        "All nine systems built and integrated: world, sky, player, creatures, ai, interaction, ui, audio, post",
+        "Third-person framing, aerial perspective, HUD, creature nameplates and a working taming loop all present"
       ],
       "gaps": [
-        "Blind A/B verdict 0/5: every studio frame correctly identified as not-the-commercial-game (overexposure, no shadows, flat grade, low detail)"
+        "Blind A/B 0/5 — every frame correctly identified as not the commercial game (overexposure, no shadow structure, flat grade, low detail)"
       ],
       "verdicts": [
-        { "shot": "vista_golden", "oursPicked": true, "note": "critic identified ours 5/5: blown-out 47% clipped, zero shadow structure" },
-        { "shot": "overshoulder_meadow", "oursPicked": true, "note": "701 colors / 0.207 sat vs ref 1584 / 0.304" },
-        { "shot": "creature_portrait", "oursPicked": true, "note": "37% clipped, creature reads as smooth untextured blob (edge 1.9 vs 9.8)" },
-        { "shot": "creature_group", "oursPicked": true, "note": "705 colors / 0.181 sat / 16.5% blown" },
-        { "shot": "dusk_mood", "oursPicked": true, "note": "511 colors, banded sky, empty mid-ground" }
+        { "shot": "vista_golden", "oursPicked": false, "note": "blown out, 47% clipped, zero shadow structure" },
+        { "shot": "overshoulder_meadow", "oursPicked": false, "note": "701 colours / 0.207 sat vs reference 1584 / 0.304" },
+        { "shot": "creature_portrait", "oursPicked": false, "note": "creature reads as a smooth untextured blob (edge 1.9 vs 9.8)" },
+        { "shot": "creature_group", "oursPicked": false, "note": "705 colours / 0.181 sat / 16.5% blown" },
+        { "shot": "dusk_mood", "oursPicked": false, "note": "511 colours, banded sky, empty mid-ground" }
       ]
     },
     {
@@ -52,17 +78,17 @@
       "title": "Scaffold, capture harness, blind-A/B tooling",
       "date": "2026-08-02",
       "status": "done",
-      "summary": "Engine, system contracts and the deterministic capture harness are working. First run silently screenshotted the loading overlay and still reported OK — fixed, and a frame probe now fails any capture that is blank, uniform, or still showing an overlay.",
+      "summary": "Engine, system contracts and the deterministic capture harness. The first run silently screenshotted the loading overlay and still reported OK — fixed, and a frame probe now fails any capture that is blank, uniform, or still showing an overlay.",
       "improvements": [
-        "Fixed-timestep engine with a system registry; systems never import each other, so builder agents can own disjoint directories without conflicts",
+        "Fixed-timestep engine with a system registry; systems never import each other, so builder agents own disjoint directories without conflicts",
         "Deterministic seeded RNG and noise — same seed always produces the same world, which is what makes round-over-round A/B meaningful",
         "Headless capture harness driving the game through the same input path a human uses",
         "Matched-shot protocol: 6 staged stills + 2 motion strips",
         "Blind A/B pack builder that normalises resolution/format/quality so critics judge the picture, not a technical tell",
-        "17 official Palworld reference stills acquired and readable by agents"
+        "17 official Palworld stills + 60 trailer frames acquired, curated, and readable by agents"
       ],
       "gaps": [
-        "Stub art across the board — this round only proves the measuring instruments work"
+        "Stub art across the board — this round only proved the measuring instruments work"
       ]
     }
   ]
