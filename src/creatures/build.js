@@ -46,7 +46,7 @@ export function speciesAsset(def, rng) {
   });
 
   const fuzz = furTexture(rng, {
-    size: 256, contrast: def.fur.contrast, streak: def.fur.streak ?? 0.6, tufts: def.fur.tufts ?? 60,
+    size: 384, contrast: def.fur.contrast, streak: def.fur.streak ?? 0.6, tufts: def.fur.tufts ?? 60,
   });
   const furMat = furMaterial({
     map: fuzz, sheen: def.fur.sheen, rim: def.fur.rim,
@@ -64,6 +64,15 @@ export function instantiate(asset) {
   const root = new THREE.Group();
   root.name = `creature:${def.id}`;
 
+  // `root` is the PLACEMENT node — position and the facing other systems ask for; the
+  // AI and the taming arc both write root.rotation.y directly. `pose` is the creature
+  // system's own presentation offset on top of it: the torso's lag behind that
+  // requested facing, and the standing stance. Reference #12 — a Pal is never squared
+  // dead-on to what it is looking at; the head does the last 20-30 degrees.
+  const pose = new THREE.Group();
+  pose.name = 'pose';
+  root.add(pose);
+
   const bones = def.boneSpec.map((b, i) => {
     const bone = new THREE.Bone();
     bone.name = b.name;
@@ -73,7 +82,7 @@ export function instantiate(asset) {
   def.boneSpec.forEach((b, i) => {
     if (b.parent) bones[def.boneSpec.findIndex((x) => x.name === b.parent)].add(bones[i]);
   });
-  root.add(bones[0]);
+  pose.add(bones[0]);
 
   const tex = faceTex.clone();
   tex.needsUpdate = true;
@@ -92,11 +101,11 @@ export function instantiate(asset) {
   mesh.receiveShadow = true;
   mesh.renderOrder = 1;
   mesh.bind(new THREE.Skeleton(bones, boneInverses), new THREE.Matrix4());
-  root.add(mesh);
+  pose.add(mesh);
 
   const B = {};
   bones.forEach((b) => { B[b.name] = b; });
-  return { root, mesh, bones: B, faceMat, faceTex: tex };
+  return { root, pose, mesh, bones: B, faceMat, faceTex: tex };
 }
 
 export function setExpression(rig, name) {

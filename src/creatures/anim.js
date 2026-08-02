@@ -275,6 +275,7 @@ function evalState(c, name, t, spd, prog) {
 /* ------------------------------------------------------------------ gestures */
 
 const GESTURES = ['earflick', 'headcock', 'lookaround', 'tailflick', 'sniff', 'shiver', 'stretch', 'perk'];
+const ATTENTIVE = ['headcock', 'perk', 'earflick', 'headcock', 'sniff', 'perk'];
 
 function applyGesture(c, o, name, k) {
   const e = Math.sin(Math.PI * k);
@@ -283,7 +284,7 @@ function applyGesture(c, o, name, k) {
       o.earPitch += -0.55 * Math.sin(Math.PI * Math.min(1, k * 3)) * (k < 0.34 ? 1 : 0);
       o.earSpread += 0.30 * e; o.headRoll += 0.05 * e; break;
     case 'headcock':
-      o.headRoll += 0.34 * e; o.headYaw += 0.20 * e; o.headPitch += -0.06 * e;
+      o.headRoll += 0.22 * e; o.headYaw += 0.22 * e; o.headPitch += -0.06 * e;
       o.earSpread += 0.10 * e; break;
     case 'lookaround': {
       const s = Math.sin(k * Math.PI * 2);
@@ -319,6 +320,9 @@ export function initRig(cr, rng) {
     headRoll: rng.range(-0.12, 0.12), headYaw: rng.range(-0.22, 0.22),
     armL: rng.range(-0.14, 0.14), armR: rng.range(-0.14, 0.14),
     ear: rng.range(-0.10, 0.14), earSpread: rng.range(-0.08, 0.10),
+    // reference #12 / video #3: one ear forward and one back. A constant per-creature
+    // asymmetry, so the two ears are never mirror images even in a still.
+    earAsym: rng.range(0.07, 0.20) * (rng.bool() ? 1 : -1),
   };
   cr._tmp = newPose();
   cr._pose = newPose();
@@ -374,19 +378,28 @@ export function updateRig(cr, dt, camPos) {
     const k = (t - g.t0) / g.dur;
     if (k > 0 && k < 1) applyGesture(cr, p, g.name, k);
     else if (k >= 1 + g.gap) {
-      g.name = cr._rng.pick(GESTURES);
+      // Video #5/#11: an animal that has clocked you does attentive things — a head
+      // cock, an ear perk, a look — not a stretch or a yawn. Attention changes the
+      // *content* of the idle, it does not freeze it into a stare.
+      g.name = cr._rng.pick((cr.attend ?? 0) > 0.45 ? ATTENTIVE : GESTURES);
       g.t0 = t; g.dur = cr._rng.range(0.7, 1.6); g.gap = cr._rng.range(0.9, 3.4);
     }
   }
 
-  // ---- head look-at, additive and sprung
+  // ---- head look-at, additive and sprung.
+  // Measured against the RENDERED torso yaw, not the AI's desired yaw, so that while
+  // the body is still swinging around the head is already on target (video #5).
+  const bodyYaw = cr.bodyYaw === undefined ? cr.yaw : cr.bodyYaw;
   let lookY = 0, lookP = 0;
   if (cr.lookAt) {
     _v.copy(cr.lookAt).sub(cr.position);
     const d = Math.hypot(_v.x, _v.z);
-    const want2 = Math.atan2(-_v.x, -_v.z) - cr.yaw;
+    const want2 = Math.atan2(-_v.x, -_v.z) - bodyYaw;
     lookY = clamp(Math.atan2(Math.sin(want2), Math.cos(want2)), -1.0, 1.0);
     lookP = clamp(-Math.atan2(_v.y - cr.def.size * 0.72, d), -0.42, 0.55);
+  } else {
+    // no explicit target: the head still leads whatever turn the body is committing to
+    lookY = clamp(cr.yawLag || 0, -0.85, 0.85);
   }
   const ly = S.lookY.step(lookY, dt), lp = S.lookP.step(lookP, dt);
   const lw = cr.lookWeight === undefined ? 1 : cr.lookWeight;
@@ -422,8 +435,9 @@ export function updateRig(cr, dt, camPos) {
   const turn = clamp((cr.yawRate || 0) * 0.13, -0.35, 0.35);
 
   const eBase = p.earPitch + flop * (cr.def.earFloppy ?? 1);
-  b.earL.rotation.set(S.earL.step(eBase, dt), turn * 0.5, -p.earSpread - turn * 0.4);
-  b.earR.rotation.set(S.earR.step(eBase, dt), turn * 0.5, p.earSpread - turn * 0.4);
+  const asym = cr.bias.earAsym ?? 0;
+  b.earL.rotation.set(S.earL.step(eBase + asym, dt), turn * 0.5 + asym * 0.5, -p.earSpread - turn * 0.4 - asym * 0.35);
+  b.earR.rotation.set(S.earR.step(eBase - asym * 0.75, dt), turn * 0.5 - asym * 0.35, p.earSpread - turn * 0.4 - asym * 0.2);
   if (b.earLT) {
     const tipT = p.earTip + flop * 0.85 + p.earPitch * 0.30;
     b.earLT.rotation.set(S.earLT.step(tipT, dt), 0, -turn * 0.5);

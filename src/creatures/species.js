@@ -165,17 +165,36 @@ const woolkinStops = [
 const WOOLKIN = {
   id: 'woolkin', name: 'Woolkin', size: 1.06, speed: 1.9, shy: 0.30, diet: 'grass',
   gait: 'hop', mass: 1.0,
-  pal: { hero: 0xf6f0e2, wool: 0xfbf7ec, face: 0x744f42, ear: 0x5d3f36, horn: 0xf0b657, hoof: 0x6b4d3f },
-  fur: { rep: [7, 6], contrast: 0.20, tufts: 90, streak: 0.35, sheen: 0.0, rim: 0.17, fill: 0.36, wrap: 0.66, fuzz: 0.20 },
+  // Reference #5: ONE saturated hero hue + a cream belly + dark accents on the
+  // extremities. A white fleece is the least characterful choice available and dies
+  // against a pale sky, so the fleece is warm apricot — complementary to the meadow's
+  // yellow-green, which is where the separation comes from (saturation contrast, not
+  // value contrast). Cream underside, cocoa face patch and ears, amber horns.
+  pal: { hero: 0xe0824d, wool: 0xeb9a67, cream: 0xf9dcb4, face: 0x4a2b22, ear: 0x8b4a30, horn: 0xe0971f, hoof: 0x38231b },
+  fur: { rep: [10, 9], contrast: 0.30, tufts: 110, streak: 0.35, sheen: 0.0, rim: 0.20, fill: 0.36, wrap: 0.66, fuzz: 0.20 },
+  // Reference #3, calibrated against pw_00. Two things to know about this block:
+  //
+  //   * `tall` is an ASPECT CORRECTION, not a style knob. The face cell is square but
+  //     the surface patch it lands on is 0.66 wide and 0.46 tall in body units, so a
+  //     round eye in the canvas renders 0.7x as tall as it is wide. tall = 1.85 puts
+  //     the rendered eye back at the reference's tall oval. Change faceU/faceV and this
+  //     number has to move with them or the face goes wide-and-squashed again.
+  //   * `plate` is the dark face patch the features sit on — drawn, not vertex-painted,
+  //     so it has an edge and is registered with the eyes exactly.
   face: {
-    gap: 0.155, eyeY: 0.485, eyeR: 0.125, tall: 1.28, slant: 0.20, lid: 0.16,
-    outlineW: 0.030, outline: '#2c1c18', sclera: '#ffffff',
-    iris: '#c8791d', iris2: '#f5c246', pupil: '#241209', irisR: 0.60, irisTall: 1.05, brow: false,
-    mouth: 'cat', mouthY: 0.665, mouthW: 0.072, mouthIn: '#59262c', tongue: '#e08f96',
-    nose: { y: 0.60, w: 0.020, color: '#3a231d' },
-    blush: 'rgba(232,150,140,0.30)', blushGap: 0.30, blushY: 0.615, blushR: 0.085,
+    plate: { y: 0.470, rx: 0.300, ry: 0.430, color: '#4a2b22', soft: 0.07 },
+    gap: 0.112, eyeY: 0.395, eyeR: 0.092, tall: 1.87, slant: 0.16, lid: 0.88,
+    outlineW: 0.022, outline: '#24140f', sclera: '#ffffff',
+    iris: '#c25c05', iris2: '#f2ae1c', pupil: '#1a0c05', irisR: 0.80, irisTall: 1.02,
+    pupilR: 0.44, irisX: 0.0, irisY: 0.05, brow: false,
+    mouth: 'cat', mouthY: 0.665, mouthW: 0.066, mouthIn: '#59262c', tongue: '#e08f96',
+    nose: null,
+    blush: 'rgba(244,150,124,0.40)', blushGap: 0.212, blushY: 0.600, blushR: 0.068,
   },
-  faceU: 0.098, faceV: [0.505, 0.845],
+  // The decal patch is deliberately much larger than the drawn face: everything outside
+  // the plate is transparent and alpha-tested away, so the extra area costs nothing and
+  // it means the plate size is set by art, not by where the patch happens to run out.
+  faceU: 0.200, faceV: [0.400, 0.920],
   key: {
     hipY: 0.26, spineY: 0.53, headY: 0.735, headZ: -0.02,
     earX: 0.245, earY: 0.775, earZ: 0.02, earLen: 0.10,
@@ -190,78 +209,98 @@ const WOOLKIN = {
     B.addGrid(sweepGrid({ uSeg: 44, vSeg: 42, stops: woolkinStops }), {
       matrix: M(), weight: bodyW, uvScale: this.fur.rep,
       paint: bodyPaint({
-        base: P.hero, top: 0xfffdf6, ao: 0.16, aoV: 0.34,
-        patches: [{ color: P.face, u: 0, v: 0.678, ru: 0.115, rv: 0.150, soft: 0.30 }],
+        base: P.hero, top: 0xefab7c, ao: 0.16, aoV: 0.34,
+        belly: { color: P.cream, spread: 0.32, soft: 0.6, v0: 0.02, v1: 0.44, fade: 0.14, amt: 0.9 },
+        patches: [{ color: P.face, u: 0, v: 0.683, ru: 0.175, rv: 0.220, soft: 0.55, amt: 0.55 }],
       }),
     });
     // ---- wool lobes: the scalloped outline. Placed everywhere EXCEPT the face.
     const lobes = [];
+    // THE FRONT IS -Z. sweepGrid puts u=0 (and therefore the drawn-face patch, which
+    // spans u in +/-faceU) on the -Z side, so a lobe ring must put th=0 on -Z too.
+    // It used to use +cos here, which placed th=0 on +Z — meaning `skipFront` cleared
+    // the BACK of the fleece and piled every wool lobe on top of the face. That is why
+    // the portrait read as a blank ball: the face texture was drawn, and then buried.
     const ring = (y, rad, n, lr, phase, skipFront) => {
       for (let a = 0; a < n; a++) {
         const th = phase + (a / n);
         if (skipFront && du(th, 0) < skipFront) continue;
-        lobes.push([Math.sin(th * 6.2832) * rad, y, Math.cos(th * 6.2832) * rad, lr]);
+        lobes.push([Math.sin(th * 6.2832) * rad, y, -Math.cos(th * 6.2832) * rad, lr]);
       }
     };
-    ring(0.815, 0.285, 9, 0.128, 0.055, 0.145);
-    ring(0.665, 0.375, 10, 0.150, 0.00, 0.115);
-    ring(0.480, 0.400, 10, 0.158, 0.05, 0.085);
-    ring(0.310, 0.330, 8, 0.140, 0.06, 0.00);
-    ring(0.920, 0.165, 5, 0.105, 0.10, 0.00);
+    // pw_00 calibration: the fleece is ONE smooth mass whose *outline* is scalloped.
+    // The lobes must overlap heavily and break the silhouette by only ~15-20% of the
+    // body radius — push them further out and it stops being a sheep and starts being
+    // a bunch of grapes.
+    // The skipFront windows are sized to the drawn-face patch (faceU = 0.135 of a turn,
+    // i.e. +/-49 degrees) so the fleece FRAMES the face instead of covering it.
+    ring(0.815, 0.262, 13, 0.134, 0.048, 0.215);
+    ring(0.665, 0.312, 14, 0.150, 0.00, 0.210);
+    ring(0.480, 0.326, 13, 0.152, 0.042, 0.200);
+    ring(0.310, 0.252, 10, 0.140, 0.05, 0.00);
+    ring(0.920, 0.152, 8, 0.118, 0.09, 0.165);
     const lobeGrid = sphereGrid(1.0, 12, 9);
+    const lobePaint = bodyPaint({ base: P.wool, top: 0xf4b184, ao: 0.20, aoV: 0 });
     for (const [x, y, z, r] of lobes) {
       B.addGrid(lobeGrid, {
-        matrix: M([x, y, z], [0, 0, 0], [r, r * 0.94, r]),
-        weight: bodyW, uvScale: [2.4, 2.0],
-        paint: bodyPaint({ base: P.wool, top: 0xfffdf4, ao: 0.26, aoV: 0 }),
+        matrix: M([x, y, z], [0, 0, 0], [r, r * 0.88, r]),
+        weight: bodyW, uvScale: [2.4, 2.0], paint: lobePaint,
       });
     }
     // ---- droopy ears (two blade segments so they swing)
-    const earStops = arc(12, (t) => ({
-      r: 0.085 * Math.sin(Math.min(1, t * 1.06) * Math.PI) ** 0.62 * (1 - 0.15 * t),
-      x: 0.245 + t * 0.115, y: 0.775 - t * 0.20 - t * t * 0.10, z: 0.02 + t * 0.05,
-      sx: 0.55 + 0.5 * Math.sin(t * 3.0), sz: 1.6 - 0.5 * t,
+    // Reference #2: the ears ARE the silhouette. The fleece lobes bulge out to ~0.47
+    // of body radius, so an ear that only reaches 0.36 is invisible — these have to
+    // clear the wool by roughly half a body radius or the creature is just a ball.
+    const earStops = arc(16, (t) => ({
+      r: 0.132 * Math.sin(Math.min(1, 0.09 + t * 0.95) * Math.PI) ** 0.55 * (1 - 0.16 * t),
+      x: 0.290 + 0.545 * t ** 0.70,
+      y: 0.805 - t * 0.150 - t * t * 0.330,
+      z: 0.010 + t * 0.080,
+      sx: 0.52 + 0.30 * Math.sin(t * 2.4), sz: 1.95 - 0.55 * t,
     }));
     const earW = chainWeight([[i.head, 0], [i.earL, 0.16], [i.earLT, 0.56]], 0.26);
     const earWR = chainWeight([[i.head, 0], [i.earR, 0.16], [i.earRT, 0.56]], 0.26);
-    const earG = sweepGrid({ uSeg: 16, vSeg: 18, stops: earStops });
-    B.addGrid(earG, { matrix: M(), weight: earW, uvScale: [2, 3], paint: partPaint(P.ear, { rootAo: 0.34 }) });
-    B.addGrid(earG, { matrix: MIRROR, weight: earWR, uvScale: [2, 3], paint: partPaint(P.ear, { rootAo: 0.34 }) });
+    const earG = sweepGrid({ uSeg: 16, vSeg: 20, stops: earStops });
+    const paintWoolEar = partPaint(P.ear, { tip: 0x3d2118, tipV: 0.58, rootAo: 0.30 });
+    B.addGrid(earG, { matrix: M(), weight: earW, uvScale: [2, 3], paint: paintWoolEar });
+    B.addGrid(earG, { matrix: MIRROR, weight: earWR, uvScale: [2, 3], paint: paintWoolEar });
     // ---- horns
-    const hornStops = arc(12, (t) => ({
-      r: 0.048 * (1 - 0.82 * t) + 0.004,
-      x: 0.135 + Math.sin(t * 1.75) * 0.135,
-      y: 0.905 + t * 0.075 - t * t * 0.055,
-      z: 0.045 + t * 0.02 - t * t * 0.16,
+    const hornStops = arc(14, (t) => ({
+      r: 0.082 * (1 - 0.94 * t) + 0.004,
+      x: 0.118 + t * 0.105 + t * t * 0.045,
+      y: 0.890 + t * 0.255,
+      z: -0.015 - t * 0.045,
       sx: 1, sz: 1,
     }));
     const hornG = sweepGrid({ uSeg: 12, vSeg: 14, stops: hornStops });
-    B.addGrid(hornG, { matrix: M(), weight: rigid(i.head), uvScale: [1.6, 2], paint: partPaint(P.horn, { tip: 0xfbdda2, tipV: 0.55, rootAo: 0.24 }) });
-    B.addGrid(hornG, { matrix: MIRROR, weight: rigid(i.head), uvScale: [1.6, 2], paint: partPaint(P.horn, { tip: 0xfbdda2, tipV: 0.55, rootAo: 0.24 }) });
+    B.addGrid(hornG, { matrix: M(), weight: rigid(i.head), uvScale: [1.6, 2], paint: partPaint(P.horn, { tip: 0xefb84e, tipV: 0.55, rootAo: 0.24 }) });
+    B.addGrid(hornG, { matrix: MIRROR, weight: rigid(i.head), uvScale: [1.6, 2], paint: partPaint(P.horn, { tip: 0xefb84e, tipV: 0.55, rootAo: 0.24 }) });
     // ---- stubby legs (mitten feet, no knee)
     const legStops = arc(10, (t) => ({
-      r: 0.078 * (1 - 0.10 * t) * Math.sin(Math.min(1, 0.30 + t * 0.78) * Math.PI) ** 0.42,
-      y: 0.215 - t * 0.215, z: -0.015 - t * 0.02, sz: 1 + 0.55 * t * t,
+      r: 0.090 * (1 - 0.10 * t) * Math.sin(Math.min(1, 0.30 + t * 0.78) * Math.PI) ** 0.42,
+      y: 0.235 - t * 0.235, z: -0.015 - t * 0.02, sz: 1 + 0.55 * t * t,
     }));
     const legG = sweepGrid({ uSeg: 12, vSeg: 12, stops: legStops });
     for (const [mx, bn] of [[1, i.legL], [-1, i.legR]]) {
       B.addGrid(legG, {
         matrix: mx > 0 ? M([0.135, 0, 0]) : mirrored(M([0.135, 0, 0])),
-        weight: rigid(bn), uvScale: [1.6, 1.6], paint: partPaint(P.hero, { tip: P.hoof, tipV: 0.66, rootAo: 0.36 }),
+        weight: rigid(bn), uvScale: [1.6, 1.6], paint: partPaint(P.hero, { tip: P.hoof, tipV: 0.48, rootAo: 0.36 }),
       });
     }
     // ---- little arms
+    // pw_00's sheep has two small mitten arms poking clear of the fleece. Started inside
+    // the wool mass they simply vanish, so they start at the fleece surface.
     const armStops = arc(10, (t) => ({
-      r: 0.070 * Math.sin(Math.min(1, 0.34 + t * 0.72) * Math.PI) ** 0.4 * (1 + 0.2 * t * t),
-      x: 0.30 + t * 0.055, y: 0.485 - t * 0.20, z: -0.03 - t * 0.02,
+      r: 0.074 * Math.sin(Math.min(1, 0.34 + t * 0.72) * Math.PI) ** 0.4 * (1 + 0.22 * t * t),
+      x: 0.335 + t * 0.090, y: 0.485 - t * 0.205, z: -0.03 - t * 0.02,
     }));
     const armG = sweepGrid({ uSeg: 12, vSeg: 12, stops: armStops });
-    B.addGrid(armG, { matrix: M(), weight: rigid(i.armL), uvScale: [1.6, 1.6], paint: partPaint(P.wool, { tip: P.hoof, tipV: 0.72, rootAo: 0.34 }) });
-    B.addGrid(armG, { matrix: MIRROR, weight: rigid(i.armR), uvScale: [1.6, 1.6], paint: partPaint(P.wool, { tip: P.hoof, tipV: 0.72, rootAo: 0.34 }) });
+    B.addGrid(armG, { matrix: M(), weight: rigid(i.armL), uvScale: [1.6, 1.6], paint: partPaint(P.wool, { tip: P.hoof, tipV: 0.66, rootAo: 0.34 }) });
+    B.addGrid(armG, { matrix: MIRROR, weight: rigid(i.armR), uvScale: [1.6, 1.6], paint: partPaint(P.wool, { tip: P.hoof, tipV: 0.66, rootAo: 0.34 }) });
     // ---- wool tail puff
     B.addGrid(sphereGrid(1, 12, 9), {
-      matrix: M([0, 0.615, 0.345], [0, 0, 0], [0.10, 0.095, 0.10]),
-      weight: rigid(i.tail0), uvScale: [2, 2], paint: bodyPaint({ base: P.wool, ao: 0.24, aoV: 0 }),
+      matrix: M([0, 0.600, 0.410], [0, 0, 0], [0.135, 0.125, 0.135]),
+      weight: rigid(i.tail0), uvScale: [2, 2], paint: bodyPaint({ base: P.wool, ao: 0.22, aoV: 0 }),
     });
     return { weight: bodyW, stops: woolkinStops };
   },
@@ -292,7 +331,7 @@ const EMBERFOX = {
   pal: { hero: 0xef8b62, deep: 0xdb6b46, belly: 0xf7dda6, ear: 0xf7b48e, inner: 0xd25f52, paw: 0x8f4535, tail: 0xfbe6c4 },
   fur: { rep: [7, 7], contrast: 0.15, tufts: 70, streak: 0.7, sheen: 0.0, rim: 0.18, fill: 0.33, wrap: 0.60, fuzz: 0.18 },
   face: {
-    gap: 0.165, eyeY: 0.455, eyeR: 0.140, tall: 1.30, slant: 0.30, lid: 0.20,
+    gap: 0.185, eyeY: 0.450, eyeR: 0.162, tall: 1.62, slant: 0.28, lid: 0.84,
     outlineW: 0.028, outline: '#2b1a1c', sclera: '#ffffff',
     iris: '#1a86c9', iris2: '#66d2f2', pupil: '#0d2c3f', irisR: 0.62, irisTall: 1.08, brow: false,
     mouth: 'cat', mouthY: 0.655, mouthW: 0.078, mouthIn: '#5c2830', tongue: '#e58a92',
@@ -407,7 +446,7 @@ const MOSSHORN = {
   pal: { hero: 0x8aa257, deep: 0x6d8543, belly: 0xdcd7b0, horn: 0xd9cba4, hoof: 0x4b4636, moss: 0x6f9a45, muzzle: 0xc9c39a },
   fur: { rep: [8, 5], contrast: 0.17, tufts: 80, streak: 0.9, sheen: 0.02, rim: 0.15, fill: 0.30, wrap: 0.58, fuzz: 0.14 },
   face: {
-    gap: 0.170, eyeY: 0.430, eyeR: 0.118, tall: 1.10, slant: 0.16, lid: 0.28,
+    gap: 0.180, eyeY: 0.430, eyeR: 0.136, tall: 0.96, slant: 0.16, lid: 0.68,
     outlineW: 0.026, outline: '#2a2416', sclera: '#ffffff',
     iris: '#b1841e', iris2: '#e8c05a', pupil: '#1d1608', irisR: 0.58, brow: true,
     mouth: 'smile', mouthY: 0.745, mouthW: 0.062, mouthIn: '#4a2a26', tongue: '#d98d90',
@@ -527,7 +566,7 @@ const DEWHARE = {
   pal: { hero: 0x8fc9e6, deep: 0x5aa8d4, belly: 0xf3f8fb, tip: 0x2f5fb0, paw: 0xeef5f9, mark: 0x2f5fb0 },
   fur: { rep: [6, 8], contrast: 0.09, tufts: 40, streak: 1.2, sheen: 0.22, rim: 0.20, fill: 0.32, wrap: 0.55, fuzz: 0.14 },
   face: {
-    gap: 0.152, eyeY: 0.470, eyeR: 0.122, tall: 1.34, slant: 0.10, lid: 0.10,
+    gap: 0.172, eyeY: 0.462, eyeR: 0.146, tall: 1.66, slant: 0.10, lid: 0.92,
     outlineW: 0.024, outline: '#2c2338', sclera: '#ffffff',
     iris: '#8c46c8', iris2: '#f0d878', pupil: null, irisR: 0.66, irisTall: 1.12, brow: false,
     mouth: 'smile', mouthY: 0.635, mouthW: 0.058, mouthIn: '#5a2a3a', tongue: '#e58a9c',

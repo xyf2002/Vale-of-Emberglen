@@ -76,21 +76,56 @@ export function makeNoiseTexture(seed, size = 256, freq = 5, octaves = 4, contra
     return lp(lp(grad(A0, fx, fy), grad(B0, fx - 1, fy), u), lp(grad(A1, fx, fy - 1), grad(B1, fx - 1, fy - 1), u), v);
   };
 
+  // ------------------------------------------------------------------------
+  // THIS IS ALBEDO *MODULATION*, NOT ALBEDO. Two compounding bugs used to make it
+  // eat most of the ground's brightness, and that was the single largest cause of
+  // the 2-3x too dark ground:
+  //
+  //   1. `new THREE.Color(hex)` is already LINEAR (ColorManagement is on), and the
+  //      result was written straight into an sRGB-tagged canvas. Sampling therefore
+  //      linearised it a second time: the authored 0.275 came back as 0.093.
+  //   2. the ramp ran the full way down to the dark tint, so the MEAN multiplier on
+  //      ground albedo was ~0.36, not ~1.
+  //
+  //   measured: tintA 0x8f8f83, contrast 0.34  ->  sampled linear 0.13 .. 0.76,
+  //   mean 0.36. The ground albedo was being cut to a third before a single light
+  //   touched it.
+  //
+  // Fixed: the ramp is normalised so its BRIGHT end is white, its dark end is the
+  // authored tint compressed toward white by MOD, and the result is sRGB-encoded on
+  // the way out so the sampler returns what was authored. Mean multiplier ~0.86.
+  // ------------------------------------------------------------------------
   const ca = new THREE.Color(tintA), cb = new THREE.Color(tintB);
+  // How much of the authored darkening survives. Low values make the ground a flat
+  // painted sheet (which is what the first fix produced -- correct brightness, no
+  // texture); 0.66 keeps a visible mottle without eating the albedo again.
+  const MOD = 0.66;
+  const norm = Math.max(cb.r, cb.g, cb.b, 1e-4);
+  const lo = [ca.r, ca.g, ca.b].map((v, k) => 1 - MOD * (1 - v / norm) * ([cb.r, cb.g, cb.b][k] / norm));
+  const hi = [cb.r / norm, cb.g / norm, cb.b / norm];
+  const enc = (v) => {
+    v = v < 0 ? 0 : v > 1 ? 1 : v;
+    return (v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055) * 255;
+  };
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
+      // Two extra octaves and a shallower amplitude rolloff (0.58 rather than 0.5).
+      // The ground map repeats every 7.5 m, so with a 1/2 rolloff there is almost no
+      // energy left at the 10-20 cm scale and a camera 1-2 m off the deck sees a
+      // smooth painted surface. The reference plates have visible ground texture at
+      // exactly that scale.
       let a = 1, f = freq, sum = 0, nrm = 0;
-      for (let o = 0; o < octaves; o++) {
+      for (let o = 0; o < octaves + 2; o++) {
         sum += a * pnoise((x / size) * f, (y / size) * f, f);
-        nrm += a; a *= 0.5; f *= 2;
+        nrm += a; a *= 0.58; f *= 2;
       }
       let n = sum / nrm; // -1..1
       n = 0.5 + n * 0.5 * contrast * 2;
       n = Math.max(0, Math.min(1, n));
       const i = (y * size + x) * 4;
-      img.data[i] = (ca.r + (cb.r - ca.r) * n) * 255;
-      img.data[i + 1] = (ca.g + (cb.g - ca.g) * n) * 255;
-      img.data[i + 2] = (ca.b + (cb.b - ca.b) * n) * 255;
+      img.data[i] = enc(lo[0] + (hi[0] - lo[0]) * n);
+      img.data[i + 1] = enc(lo[1] + (hi[1] - lo[1]) * n);
+      img.data[i + 2] = enc(lo[2] + (hi[2] - lo[2]) * n);
       img.data[i + 3] = 255;
     }
   }

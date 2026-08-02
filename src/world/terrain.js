@@ -93,6 +93,23 @@ export function createTerrain(ctx) {
     const cgt = clamp((CRAG.r - cd) / 34, 0, 1);
     h += 26 * (cgt * cgt * (3 - 2 * cgt)) * (0.9 + 0.25 * noise.fbm(x * 0.03 + 5, z * 0.03, 2));
 
+    // ---- the starting meadow is a genuinely FLAT plane -------------------
+    // Reference #7 stacks three depth planes and the nearest one is a calm,
+    // low-frequency carpet — pw_11 and pw_15 both have a foreground you could
+    // roll a ball across. It is also a hard requirement of the matched-shot
+    // protocol: every gameplay shot puts the camera at player.y + ~1.7 m at a
+    // horizontal OFFSET of 5-9 m. On the old surface the ground under that
+    // offset could sit 2 m higher than under the player's feet, which buried
+    // the camera inside the hillside and let the sky dome show through the
+    // backfaces (that is what the white wedge in r07's vista_golden was).
+    // Holding the first ~120 m to a <4 deg mean gradient removes the failure
+    // mode at the source instead of hoping the spawn lands somewhere safe.
+    const meadow = 1 - smootherstep(96, 210, r);
+    if (meadow > 0.001) {
+      const plainH = 8.2 + u * 0.010 + noise.fbm(wx * 0.0034 + 3.1, wz * 0.0034 - 8.4, 2) * 2.6;
+      h = lerp(h, plainH, meadow * 0.90);
+    }
+
     // ---- lake basin ----
     const ld = Math.hypot(x - LAKE.x, z - LAKE.z);
     const lt = clamp((LAKE.r + 6 - ld) / 52, 0, 1);
@@ -100,8 +117,8 @@ export function createTerrain(ctx) {
 
     // ---- sheltered starting hollow ----
     const hollow = Math.exp(-(r * r) / (54 * 54));
-    h -= hollow * 4.6;
-    h += micro * (1 - 0.65 * hollow);
+    h -= hollow * 2.2;
+    h += micro * (1 - 0.65 * hollow) * (1 - 0.55 * meadow);
 
     // ---- worn paths cut a shallow trough ----
     let pd = 1e9;
@@ -174,9 +191,13 @@ export function createTerrain(ctx) {
       for (const p of paths) { const d = distToPath(x, z, p); if (d < pd) pd = d; }
       const onPath = 1 - smoothstep(1.4, 5.2, pd);
 
-      // patchy bald ground — deliberately clumpy, not uniform
+      // patchy bald ground — deliberately clumpy, not uniform. Reference #8:
+      // "uniform density is the single most common tell of a fake meadow". The
+      // 60 m-scale term alone is invisible inside a single frame, so a ~10 m term
+      // carries the bald spots you can actually see from the player's eye.
       const patch = noise.fbm(x * 0.017 + 33, z * 0.017 - 12, 3);
-      const bald = smoothstep(0.16, 0.40, patch);
+      const near = noise.fbm(x * 0.098 + 5, z * 0.098 - 41, 2);
+      const bald = clamp(smoothstep(0.16, 0.40, patch) + smoothstep(0.30, 0.62, near) * 0.55, 0, 1);
       const scuff = smoothstep(0.30, 0.56, noise.fbm(x * 0.062 - 8, z * 0.062 + 3, 2));
 
       // shoreline sand
@@ -224,15 +245,24 @@ export function createTerrain(ctx) {
 
 const C = (hex) => new THREE.Color(hex).convertSRGBToLinear();
 
+// Ground albedo. Reference #5: grass is MID-VALUE and moderately desaturated
+// yellow-green, rock is grey-green, worn soil is a warm mid tan. These are the
+// albedos a sunlit meadow actually has -- the old set was a stop darker and read
+// as shaded grass even in full sun.
+// Kept deliberately close to GRASS_PAL in vegetation.js. The grass gets wrapped
+// foliage diffuse and the terrain does not, so if their albedos also disagree the
+// meadow renders as bright blades floating over a dark, differently-hued floor --
+// which is exactly what the frames showed. Same hue family, slightly lighter, so
+// the two read as one surface.
 const PAL = {
-  lush: C(0x7c9c44),
-  dry: C(0xa2a552),
-  shade: C(0x5c7a38),
-  rock: C(0x8d8f86),
-  rockWarm: C(0x9a927f),
-  dirtC: C(0xa8916a),
-  sand: C(0xc4b489),
-  high: C(0x93a184),
+  lush: C(0xb5c283),
+  dry: C(0xd0c893),
+  shade: C(0x93a073),
+  rock: C(0xa8aa9f),
+  rockWarm: C(0xb4ad99),
+  dirtC: C(0xc0aa84),
+  sand: C(0xd6c8a2),
+  high: C(0xacb89d),
 };
 
 export function buildGroundMesh(ctx, T, radius, segs) {
@@ -254,8 +284,18 @@ export function buildGroundMesh(ctx, T, radius, segs) {
     const dryness = smoothstep(-0.22, 0.30, noise.fbm(x * 0.0085 + 61, z * 0.0085 - 19, 3));
     const moist = smoothstep(14, 4, h) * 0.6 + smoothstep(0.30, -0.15, noise.fbm(x * 0.012 - 4, z * 0.012 + 27, 3)) * 0.4;
 
-    c.copy(PAL.lush).lerp(PAL.dry, dryness * 0.85);
-    c.lerp(PAL.shade, clamp(moist, 0, 1) * 0.42);
+    // Metre-scale scuff, matched to the grass tint field so the carpet and the
+    // surface it grows out of agree. Without it the terrain past the grass radius
+    // is a single flat green, which is what made the mid-ground read as felt.
+    const scuff = smoothstep(-0.30, 0.35, noise.fbm(x * 0.085 - 12, z * 0.085 + 7, 2));
+    const patch = smoothstep(-0.28, 0.28, noise.fbm(x * 0.026 + 91, z * 0.026 + 43, 3));
+
+    c.copy(PAL.lush).lerp(PAL.dry, clamp(dryness * 0.95 + scuff * 0.30 + patch * 0.26, 0, 1));
+    c.lerp(PAL.shade, clamp(moist, 0, 1) * 0.48 + (1 - patch) * 0.22);
+    // a stony/olive family on the drier high shoulders, so the landscape is not two
+    // hues wide -- the plates render 800-1600 distinct quantised colours where a
+    // meadow of one green renders 400
+    c.lerp(PAL.rockWarm, smoothstep(0.55, 0.95, dryness) * (1 - moist) * 0.30);
     c.lerp(PAL.high, smoothstep(48, 92, h) * 0.7);
     // slope rock
     const rockAmt = smoothstep(0.34, 0.66, sl);
@@ -267,7 +307,9 @@ export function buildGroundMesh(ctx, T, radius, segs) {
     const shore = smoothstep(2.2, -0.6, h - T.waterLevel) * smoothstep(LAKE.r + 24, LAKE.r - 8, Math.hypot(x - LAKE.x, z - LAKE.z));
     c.lerp(PAL.sand, shore * 0.85);
 
-    const v = 0.90 + 0.20 * noise.fbm(x * 0.045 + 3, z * 0.045 - 6, 2) + 0.10 * noise.fbm(x * 0.006, z * 0.006, 2);
+    // value break-up centred on 1.0, not 0.90 -- the old mean quietly took another
+    // 10% off every ground vertex on top of the detail map
+    const v = 1.0 + 0.20 * noise.fbm(x * 0.045 + 3, z * 0.045 - 6, 2) + 0.10 * noise.fbm(x * 0.006, z * 0.006, 2);
     colAttr[i * 3] = c.r * v; colAttr[i * 3 + 1] = c.g * v; colAttr[i * 3 + 2] = c.b * v;
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colAttr, 3));
@@ -278,6 +320,13 @@ export function buildGroundMesh(ctx, T, radius, segs) {
 
 /** Low-res ring carrying the landscape from the playable rim out to the horizon. */
 export function buildSkirtGeometry(T, r0, r1, rings, segs) {
+  // The far range was the loudest "low-poly" tell in the frame: at 26 rings / 96
+  // segments the first ring lands ~35 m triangles at 500 m, which is ~2 deg of arc
+  // and reads as faceted origami. Reference #7 wants the far plane to be a smooth,
+  // near-featureless pale silhouette, so subdivide before shading. ~31k tris, one
+  // draw call, built once.
+  rings = Math.round(rings * 2.5);
+  segs = Math.round(segs * 2.5);
   const verts = [];
   const cols = [];
   const idx = [];

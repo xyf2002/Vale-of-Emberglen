@@ -23,12 +23,25 @@ export function expressionOffset(name) {
 
 /* ------------------------------------------------------------------ helpers */
 
+/** '#rrggbb' -> a fully transparent version of the same colour, for gradient tails */
+function fade(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},0)`;
+}
+
 function ellipse(g, x, y, rx, ry, rot = 0) {
   g.beginPath();
   g.ellipse(x, y, Math.max(0.5, rx), Math.max(0.5, ry), rot, 0, 6.2832);
 }
 
-/** Clip away everything above a slanted lid line (this is what makes the eye read sharp). */
+/**
+ * Clip away everything above a slanted lid line (this is what makes the eye read sharp).
+ *
+ * CONVENTION: `lid` is how much of the eye survives, measured downward from the centre
+ * in units of the eye's half-height. lid = 1 keeps the whole ellipse; lid = 0 keeps the
+ * bottom half. Anything below ~0.6 is a heavy, sleepy-looking lid — the reference eyes
+ * (`pw_15`, `pw_12`, `pw_09`) are cut by only 10-20% of their height, not by half.
+ */
 function lidClip(g, cx, cy, S, slant, drop) {
   g.beginPath();
   const k = Math.tan(slant);
@@ -163,7 +176,33 @@ function drawMouth(g, f, S, kind) {
   g.restore();
 }
 
+/**
+ * The face PLATE — reference #3, and `pw_00` is the calibration frame: the sheep's
+ * features sit on "a distinct colour patch", a big hard-ish brown oval set into the
+ * white fleece. Drawing that patch here rather than painting it into the vertex colours
+ * matters for two reasons: it is registered with the eyes to the pixel, and it has a
+ * real edge instead of a vertex-interpolated smear.
+ */
+function drawPlate(g, f, S) {
+  const pl = f.plate;
+  const cx = S * 0.5, cy = S * pl.y, rx = S * pl.rx, ry = S * pl.ry;
+  const soft = pl.soft ?? 0.14;
+  g.save();
+  g.translate(cx, cy);
+  g.scale(1, ry / rx);
+  const grd = g.createRadialGradient(0, 0, 0, 0, 0, rx);
+  grd.addColorStop(0, pl.color);
+  grd.addColorStop(Math.max(0, 1 - soft), pl.color);
+  grd.addColorStop(1, pl.edge || fade(pl.color));
+  g.fillStyle = grd;
+  g.beginPath();
+  g.arc(0, 0, rx, 0, 6.2832);
+  g.fill();
+  g.restore();
+}
+
 function drawCell(g, f, S, expr) {
+  if (f.plate) drawPlate(g, f, S);
   // muzzle / face colour patch first, so features sit on it (sheep's brown face, monkey's cream)
   if (f.muzzle) {
     const m = f.muzzle;
@@ -192,10 +231,10 @@ function drawCell(g, f, S, expr) {
       case 'blink': drawClosedEye(g, f, S, side, 'blink'); break;
       case 'happy': drawClosedEye(g, f, S, side, 'happy'); break;
       case 'sleepy': drawClosedEye(g, f, S, side, 'sleepy'); break;
-      case 'wide': drawOpenEye(g, f, S, side, { scale: 1.16, lid: -0.06, slantMul: 0.3 }); break;
+      case 'wide': drawOpenEye(g, f, S, side, { scale: 1.15, lid: 1.06, slantMul: 0.25 }); break;
       case 'wary': drawOpenEye(g, f, S, side, { scale: 0.99, lid: 0.34, slantMul: 1.5 }); break;
-      case 'smug': drawOpenEye(g, f, S, side, { scale: 1.0, lid: 0.30, squash: 0.86 }); break;
-      case 'chew': drawOpenEye(g, f, S, side, { scale: 0.97, lid: 0.18 }); break;
+      case 'smug': drawOpenEye(g, f, S, side, { scale: 1.0, lid: 0.26, squash: 0.86 }); break;
+      case 'chew': drawOpenEye(g, f, S, side, { scale: 0.97, lid: 0.55 }); break;
       default: drawOpenEye(g, f, S, side, {}); break;
     }
   }

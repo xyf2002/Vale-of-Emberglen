@@ -3,7 +3,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 import { ORDER } from '../engine/Game.js';
-import { BloomPass, DofPass, MaterialPass, makeGradeMaterial, makeFinishMaterial } from './passes.js';
+import { AtmospherePass, BloomPass, MaterialPass, makeGradeMaterial, makeFinishMaterial } from './passes.js';
 import { resolveGrade, NAMED } from './grades.js';
 
 /**
@@ -23,9 +23,15 @@ import { resolveGrade, NAMED } from './grades.js';
  * THE CHAIN (HDR half-float throughout until the grade encodes to sRGB):
  *
  *   RenderPass ......... scene -> linear HDR, with a depth texture attached
- *   DofPass ............ portrait lenses only (fov < 46). Autofocuses on frame
- *                        centre; gives the background compression reference #11
- *                        calls for and is skipped entirely on wide shots.
+ *   AtmospherePass ..... the one depth-sampling pass. Aerial perspective (reference
+ *                        #7): saturation crushed and colour mixed toward the sky's
+ *                        own horizon radiance with distance, in scene-referred
+ *                        linear so haze blooms and tone-maps like light. Plus depth
+ *                        of field on portrait lenses (fov < 46), autofocused on the
+ *                        frame centre and capped small so the background stays
+ *                        legible (reference #11). Both live in one pass because only
+ *                        one of the composer's two targets owns the depth
+ *                        attachment; a second depth consumer feeds back on itself.
  *   BloomPass .......... soft-knee threshold + 4-mip dual-filter chain, half res.
  *                        Produces a side texture only; it never touches the colour
  *                        buffer, so bloom is composited in scene-referred linear
@@ -51,7 +57,7 @@ export function createPost() {
   let failures = 0;
 
   let composer = null;
-  let renderPass = null, dofPass = null, bloomPass = null, gradePass = null, smaaPass = null, finishPass = null;
+  let renderPass = null, atmosPass = null, bloomPass = null, gradePass = null, smaaPass = null, finishPass = null;
   let gradeMat = null, finishMat = null;
   let sceneRT = null;
   const size = new THREE.Vector2();
@@ -65,7 +71,7 @@ export function createPost() {
   let lastDof = false;
 
   function dispose() {
-    dofPass?.dispose(); bloomPass?.dispose(); gradePass?.dispose();
+    atmosPass?.dispose(); bloomPass?.dispose(); gradePass?.dispose();
     finishPass?.dispose(); smaaPass?.dispose?.();
     sceneRT?.dispose();
     composer?.renderTarget1?.dispose(); composer?.renderTarget2?.dispose();
@@ -85,8 +91,7 @@ export function createPost() {
       stencilBuffer: false,
     });
     sceneRT.texture.name = 'post.scene';
-    // DOF needs scene depth. RenderPass writes into the composer's write buffer, so
-    // the depth attachment travels with it and DofPass picks it off readBuffer.
+    // The atmosphere pass needs scene depth.
     sceneRT.depthTexture = new THREE.DepthTexture(w, h, THREE.UnsignedIntType);
 
     composer = new EffectComposer(renderer, sceneRT);
@@ -95,10 +100,17 @@ export function createPost() {
     renderPass = new RenderPass(ctx.scene, ctx.camera);
     composer.addPass(renderPass);
 
-    dofPass = new DofPass(ctx.camera, w, h);
-    dofPass.setSize(w, h);
-    dofPass.enabled = false;
-    composer.addPass(dofPass);
+    // RenderPass draws into the composer's READ buffer and does not swap, so the
+    // attachment that actually receives depth is renderTarget2's clone, not the
+    // sceneRT we handed in. Capture it once and hand it to every depth-reading pass
+    // explicitly -- relying on `readBuffer.depthTexture` only works for whichever
+    // pass happens to sit directly after RenderPass.
+    const depthTex = composer.renderTarget2?.depthTexture ?? sceneRT.depthTexture;
+
+    atmosPass = new AtmospherePass(ctx.camera, w, h);
+    atmosPass.setSize(w, h);
+    atmosPass.depthTexture = depthTex;
+    composer.addPass(atmosPass);
 
     bloomPass = new BloomPass(w, h, 4);
     composer.addPass(bloomPass);
@@ -158,6 +170,8 @@ export function createPost() {
     g.uSatHigh.value = look.satHigh;
     g.uGreenShift.value = look.greenShift;
     g.uGreenSat.value = look.greenSat;
+    g.uWhite.value = look.white ?? 0.95;
+    g.uKneeStart.value = look.kneeStart ?? 0.80;
     g.uBloomStrength.value = overrides.bloom ?? look.bloomStrength;
     v3(g.uBloomTint, look.bloomTint);
 
@@ -175,10 +189,22 @@ export function createPost() {
     // Portrait lens => shallow depth of field. Reference #11: portraits break the
     // third-person camera rules, go longer-lens, and show visible background
     // compression and defocus. Wide shots must stay crisp edge to edge.
+    // Aerial perspective follows the sky, so distant terrain and the sky converge
+    // (reference #7) instead of the haze being a fixed grey curtain.
+    const sky = ctx.get('sky');
+    const fog = sky?.getFogColor?.() ?? ctx.scene.fog?.color;
+    const hz = atmosPass.material.uniforms;
+    if (fog?.isColor) hz.uFogColor.value.copy(fog);
+    hz.uHazeStart.value = look.hazeStart ?? 40;
+    hz.uHazeRange.value = look.hazeRange ?? 520;
+    hz.uHaze.value = look.haze ?? 0.45;
+    hz.uHazeDesat.value = look.hazeDesat ?? 0.75;
+
     const fov = ctx.camera.fov ?? 60;
     const want = dofMode === 'on' || (dofMode === 'auto' && fov < 46);
-    dofPass.enabled = want;
-    dofPass.material.uniforms.uStrength.value = dofStrength;
+    // The pass always runs (it carries the aerial perspective); zero strength turns
+    // the defocus off without removing the haze.
+    hz.uStrength.value = want ? dofStrength : 0.0;
     lastDof = want;
   }
 
@@ -212,7 +238,7 @@ export function createPost() {
         renderer.info.reset();
         renderPass.scene = c.scene;
         renderPass.camera = c.camera;
-        dofPass.camera = c.camera;
+        atmosPass.camera = c.camera;
         lastLook = resolveLook();
         apply(lastLook, c.frame ?? 0);
         smaaPass.enabled = smaaReady();

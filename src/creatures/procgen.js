@@ -262,9 +262,12 @@ export function contactShadowTexture() {
   g.fillStyle = '#ffffff';
   g.fillRect(0, 0, S, S);
   const grd = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
-  grd.addColorStop(0.00, 'rgba(46,40,52,0.86)');
-  grd.addColorStop(0.30, 'rgba(60,54,66,0.72)');
-  grd.addColorStop(0.62, 'rgba(120,116,124,0.34)');
+  // "distinctly darker, with a hard-ish inner core and ~0.2 m of falloff" — but this is
+  // a MULTIPLY decal, so alpha 0.86 means multiplying the ground by 0.14, i.e. black.
+  // A contact shadow that reads as a hole is as wrong as no contact shadow at all.
+  grd.addColorStop(0.00, 'rgba(52,44,58,0.62)');
+  grd.addColorStop(0.34, 'rgba(70,62,76,0.50)');
+  grd.addColorStop(0.66, 'rgba(140,134,146,0.20)');
   grd.addColorStop(1.00, 'rgba(255,255,255,0)');
   g.fillStyle = grd;
   g.beginPath(); g.arc(S / 2, S / 2, S / 2, 0, 6.2832); g.fill();

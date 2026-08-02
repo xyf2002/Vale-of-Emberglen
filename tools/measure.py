@@ -16,12 +16,22 @@ import argparse, glob, os
 import numpy as np
 from PIL import Image
 
+# Guardrail bands are measured FROM the reference set, not invented. Two were wrong in
+# the first version and are corrected here — an instrument that reports a false failure
+# wastes a round just as surely as one that reports a false pass:
+#   colours: the real frames span 422 (pw_16, night) to 1056 (pw_11), not 800-1700.
+#   ratio:   0.63-0.96 is a DAYLIGHT number. pw_16, the reference night frame, measures
+#            1.27 — ground brighter than sky is correct after dark, so night shots are
+#            exempt rather than permanently flagged.
 TARGETS = {
-    'ratio': (0.63, 0.96, 'ground/sky luminance ratio'),
+    'ratio': (0.63, 0.96, 'ground/sky luminance ratio (daylight only)'),
     'sat':   (0.26, 0.32, 'mean saturation'),
     'clip':  (0.00, 0.50, '% pixels blown to white'),
-    'colors': (800, 1700, 'distinct quantised colours'),
+    'colors': (420, 1100, 'distinct quantised colours'),
+    'edge':  (5.0, 10.0, 'local contrast / fine detail'),
 }
+# shots whose reference comp is a night/dusk frame, where the daylight ratio does not apply
+NIGHT_SHOTS = {'dusk_mood'}
 
 
 def stats(path):
@@ -60,14 +70,16 @@ def main():
         s = stats(p)
         ours[n] = s
         bad = []
-        if not (TARGETS['ratio'][0] <= s['ratio'] <= TARGETS['ratio'][1]):
+        if n not in NIGHT_SHOTS and not (TARGETS['ratio'][0] <= s['ratio'] <= TARGETS['ratio'][1]):
             bad.append(f"ratio {s['ratio']:.2f} (want 0.63-0.96)")
         if s['sat'] < TARGETS['sat'][0]:
-            bad.append(f"undersaturated")
+            bad.append("undersaturated")
         if s['clip'] > TARGETS['clip'][1]:
-            bad.append(f"clipping")
+            bad.append("clipping")
         if s['colors'] < TARGETS['colors'][0]:
-            bad.append(f"flat palette")
+            bad.append("flat palette")
+        if s['edge'] < TARGETS['edge'][0]:
+            bad.append(f"low detail (edge {s['edge']:.1f} vs reference 5.2-9.9)")
         print(row(n, s, '  <-- ' + '; '.join(bad) if bad else '  ok'))
 
     print(f"--- REAL PALWORLD " + '-' * (len(hdr) - 18))

@@ -4,6 +4,43 @@ import { mergeGeos, paint } from './materials.js';
 
 const C = (hex) => new THREE.Color(hex).convertSRGBToLinear();
 
+/* ------------------------------------------------------------- foliage lighting */
+
+/**
+ * WRAPPED DIFFUSE for foliage.
+ *
+ * A meadow or a canopy is a translucent, self-scattering volume, not an opaque
+ * Lambert plane: light bends through and around it. Strict Lambert on a
+ * near-vertical grass normal delivers dot(n,l) ~ 0.15 under a 9 deg morning sun and
+ * the whole carpet loses two thirds of its key -- which is precisely why the two
+ * low-sun shots were the last to fail the ground/sky ratio while the midday ones
+ * passed. Palworld's meadows never do that.
+ *
+ * The wrap is worth ~2.6x at dawn and ~1.2x at noon, which is the exact shape of the
+ * error. It is applied by rewriting three's own Lambert direct-lighting chunk --
+ * onBeforeCompile hands out the shader with `#include` directives STILL UNRESOLVED,
+ * so patching the chunk body by string match on the raw source silently does
+ * nothing (it did, for one whole iteration).
+ */
+const LAMBERT_DOTNL = 'float dotNL = saturate( dot( geometryNormal, directLight.direction ) );';
+
+function wrappedLambertChunk(wrap) {
+  const src = THREE.ShaderChunk.lights_lambert_pars_fragment;
+  if (!src.includes(LAMBERT_DOTNL)) {
+    console.warn('[vegetation] Lambert chunk changed shape; foliage wrap skipped');
+    return null;
+  }
+  return src.replace(LAMBERT_DOTNL, `
+    float dotNL = dot( geometryNormal, directLight.direction );
+    dotNL = saturate((dotNL + ${wrap.toFixed(3)}) / ${(1 + wrap).toFixed(3)});
+  `);
+}
+
+function applyFoliageWrap(sh, wrap) {
+  const chunk = wrappedLambertChunk(wrap);
+  if (chunk) sh.fragmentShader = sh.fragmentShader.replace('#include <lights_lambert_pars_fragment>', chunk);
+}
+
 /* ============================================================== GRASS ========== */
 
 /**
@@ -12,7 +49,12 @@ const C = (hex) => new THREE.Color(hex).convertSRGBToLinear();
  * (a fully face-on normal makes half the field go black when the sun is low).
  */
 function bladeGeometry() {
-  const w0 = 0.5, w1 = 0.36, w2 = 0.20;
+  // Narrow. At 0.5 half-width the card was 1:4 width-to-height at the sizes we
+  // instance it at, and a 1:4 taper is not a grass blade, it is a shark fin -- that
+  // is exactly how the meadow read once the lighting was fixed. Real blades are
+  // 1:15 or thinner, which is what lets thousands of them overlap into a carpet
+  // instead of tiling as separate cones.
+  const w0 = 0.075, w1 = 0.055, w2 = 0.030;
   const y1 = 0.45, y2 = 0.78, y3 = 1.0;
   const pos = [
     -w0, 0, 0, w0, 0, 0,
@@ -30,13 +72,14 @@ function bladeGeometry() {
   return g;
 }
 
-/** three blades fanned out — one instance reads as a clump at mid distance */
-function tuftGeometry() {
+/** blades fanned out — one instance reads as a clump at every distance */
+function tuftGeometry(n = 5) {
   const parts = [];
-  const angles = [-0.5, 0.15, 0.72];
-  const scales = [[0.85, 0.8], [1.0, 1.0], [0.8, 0.62]];
-  const offs = [[-0.16, -0.05], [0.02, 0.04], [0.17, -0.08]];
-  for (let i = 0; i < 3; i++) {
+  const angles = [-0.95, -0.42, 0.05, 0.48, 0.98];
+  const scales = [[0.78, 0.66], [0.92, 0.86], [1.0, 1.0], [0.88, 0.78], [0.72, 0.60]];
+  const offs = [[-0.30, -0.10], [-0.13, 0.14], [0.02, -0.02], [0.16, 0.12], [0.31, -0.13]];
+  const pick = n >= 5 ? [0, 1, 2, 3, 4] : [0, 2, 4];
+  for (const i of pick) {
     const b = bladeGeometry().toNonIndexed();
     b.scale(scales[i][0], scales[i][1], 1);
     b.rotateZ(angles[i] * 0.35);
@@ -47,11 +90,20 @@ function tuftGeometry() {
   return mergeGeos(parts);
 }
 
+// Reference #5: grass is a MID-VALUE, moderately desaturated yellow-green. The old
+// set sat ~15% darker and greener than the reference plates measure (pw_11 lit
+// foreground grass averages rgb 100/103/66, pw_15 ~118/122/70).
+// Measured off the plates: real Palworld grass has R and G within a few percent of
+// each other (pw_11 foreground 113/114/67, pw_15 96/107/49) -- it is a YELLOW-green,
+// not a green. Ours was landing at 86/117/33, a pure poison green with the red
+// channel a third of the way down, which is the whole of the "undersaturated world,
+// oversaturated grass" complaint. Red lifted toward green, blue lifted out of the
+// hole, value held.
 const GRASS_PAL = {
-  lush: C(0x86a746),
-  dry: C(0xb2ac57),
-  shade: C(0x64853a),
-  blue: C(0x7fa562),
+  lush: C(0xafb87a),
+  dry: C(0xcdc38c),
+  shade: C(0x8a9769),
+  blue: C(0xa0b48c),
 };
 
 export function createGrass(ctx, T) {
@@ -59,10 +111,17 @@ export function createGrass(ctx, T) {
   const q = clamp(ctx.quality.grassDensity ?? 1, 0.2, 1.5);
   const spread = 1 / Math.sqrt(q);
 
+  // Reference #8: "a dense variegated carpet ... thousands of individual blade cards
+  // roughly 0.3-0.6 m tall". Scattered single blades at 0.4 m spacing read as arrows
+  // stuck in a painted sheet, which is what the frames showed once the lighting was
+  // right. Four rings of 5-blade tufts instead: ~28k tufts / ~140k blades around the
+  // camera, tight near the lens and coarsening with distance so the cost stays flat.
+  // Still four draw calls.
   const BANDS = [
-    { id: 11, r0: 0, r1: 21, step: 0.42 * spread, w: 0.055, h: 0.44, hv: 0.34, tuft: false },
-    { id: 22, r0: 20, r1: 48, step: 0.88 * spread, w: 0.095, h: 0.56, hv: 0.32, tuft: false },
-    { id: 33, r0: 46, r1: 104, step: 2.05 * spread, w: 0.22, h: 0.86, hv: 0.30, tuft: true },
+    { id: 11, r0: 0, r1: 12, step: 0.21 * spread, w: 0.20, h: 0.30, hv: 0.46, blades: 5 },
+    { id: 22, r0: 11, r1: 32, step: 0.58 * spread, w: 0.38, h: 0.40, hv: 0.42, blades: 5 },
+    { id: 33, r0: 30, r1: 70, step: 1.70 * spread, w: 0.78, h: 0.58, hv: 0.36, blades: 3 },
+    { id: 44, r0: 66, r1: 130, step: 3.40 * spread, w: 1.35, h: 0.80, hv: 0.32, blades: 3 },
   ];
 
   const uniforms = {
@@ -95,16 +154,65 @@ export function createGrass(ctx, T) {
             float w1 = sin(uTime * 1.15 + ph);
             float w2 = sin(uTime * 2.7 + ph * 2.3 + 1.7) * 0.35;
             float gust = 0.55 + 0.45 * sin(uTime * 0.31 + mvPosition.x * 0.011 + mvPosition.z * 0.013);
-            float amp = (0.16 + 0.30 * (w1 * 0.5 + 0.5) + 0.10 * w2) * gust * uGust;
+            // Amplitude must be RELATIVE TO BLADE HEIGHT. It was in world metres, so a
+            // 0.3 m blade was being displaced up to 0.46 m sideways -- a 57 degree lean.
+            // The whole meadow lay over like wet brush strokes instead of standing up,
+            // which is a big part of why the carpet read as painted-on rather than as
+            // "thousands of blade cards leaning coherently under one breeze" (ref #8).
+            float bladeLen = 1.0;
+            #ifdef USE_INSTANCING
+              bladeLen = length(instanceMatrix[1].xyz);
+            #endif
+            float amp = (0.10 + 0.22 * (w1 * 0.5 + 0.5) + 0.08 * w2) * gust * uGust * bladeLen;
             mvPosition.xz += uWind * (bend * amp);
             mvPosition.y -= bend * bend * amp * 0.30;
           }
           mvPosition = modelViewMatrix * mvPosition;
           gl_Position = projectionMatrix * mvPosition;`);
+      // ------------------------------------------------------------------
+      // THE BLACK MEADOW BUG.
+      //
+      // Blades are instanced with a NON-UNIFORM scale (~0.06 wide, ~0.45 tall).
+      // three's instanced normal path applies the inverse transpose, which is
+      // geometrically correct for a squashed card and visually fatal for grass:
+      // it rotates the authored (0, .8, .6) normal almost fully HORIZONTAL. Every
+      // blade whose random yaw pointed away from the key then lit on ambient only,
+      // and because grass is viewed at a grazing angle it occludes the ground
+      // completely from ~4 m out. Measured result: the bottom half of every
+      // gameplay frame was rgb(29, 32, 42) -- ambient blue, i.e. unlit.
+      //
+      // Fix: rebuild the normal from the blade's YAW alone and tilt it only ~22 deg
+      // off world up, so the carpet lights like the ground it grows out of
+      // (reference #8 reads as one variegated surface, not 30k individually shaded
+      // cards). DOUBLE_SIDED then tries to flip that mostly-up normal downward on
+      // back faces, which would black out half the field again, so the fragment
+      // stage restores the unflipped view-space normal.
+      // ------------------------------------------------------------------
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vGrassN;')
+        .replace('#include <defaultnormal_vertex>', `#include <defaultnormal_vertex>
+          {
+            vec3 hz = vec3(objectNormal.x, 0.0, objectNormal.z);
+            vec3 dir = length(hz) > 1e-4 ? normalize(hz) : vec3(0.0, 0.0, 1.0);
+            #ifdef USE_INSTANCING
+              dir = normalize(mat3(instanceMatrix) * dir);
+            #endif
+            dir = normalize(mat3(modelMatrix) * dir);
+            vec3 wn = normalize(vec3(0.0, 1.0, 0.0) + dir * 0.40);
+            transformedNormal = normalize(mat3(viewMatrix) * wn);
+            vGrassN = transformedNormal;
+          }`);
       sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', '#include <common>\nvarying float vBladeH;')
+        .replace('#include <common>', '#include <common>\nvarying float vBladeH;\nvarying vec3 vGrassN;')
+        .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
+          normal = normalize(vGrassN);
+          nonPerturbedNormal = normal;`)
         .replace('#include <color_fragment>', `#include <color_fragment>
-          diffuseColor.rgb *= mix(0.46, 1.10, smoothstep(0.0, 0.62, vBladeH));`);
+          // gentle root occlusion only -- reference #9 calls crease occlusion
+          // "present but gentle". The old 0.46 floor crushed the bottom two thirds
+          // of every blade, and at a grazing view that is most of what you see.
+          diffuseColor.rgb *= mix(0.76, 1.05, smoothstep(0.0, 0.55, vBladeH));`);
+      applyFoliageWrap(sh, 0.66);
     };
     m.customProgramCacheKey = () => 'grassblade';
     return m;
@@ -118,7 +226,7 @@ export function createGrass(ctx, T) {
   for (const b of BANDS) {
     const area = Math.PI * (b.r1 * b.r1 - b.r0 * b.r0);
     const cap = Math.min(90000, Math.ceil((area / (b.step * b.step)) * 1.15) + 64);
-    const geo = b.tuft ? tuftGeometry() : bladeGeometry();
+    const geo = tuftGeometry(b.blades);
     const mesh = new THREE.InstancedMesh(geo, mat, cap);
     mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3);
     mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
@@ -185,14 +293,24 @@ export function createGrass(ctx, T) {
           );
           mesh.setMatrixAt(n, m4);
 
-          // per-blade tint: big dry/lush patches + blade-to-blade jitter
+          // Per-tuft tint. Reference #8: the carpet varies blade-to-blade AND in
+          // broad patches; a single flat green is the loudest fake-meadow tell.
+          // Three scales of variation stack here: metre-scale scuff, tens-of-metres
+          // dry/lush drift, and tuft-to-tuft value jitter.
           const dryN = noise.fbm(x * 0.0085 + 61, z * 0.0085 - 19, 2);
           const dry = smoothstep(-0.22, 0.30, dryN);
+          const scuff = smoothstep(-0.30, 0.35, noise.fbm(x * 0.085 - 12, z * 0.085 + 7, 2));
           const moist = smoothstep(16, 4, gy) * 0.55;
-          col.copy(GRASS_PAL.lush).lerp(GRASS_PAL.dry, dry * 0.9);
+          col.copy(GRASS_PAL.lush).lerp(GRASS_PAL.dry, clamp(dry * 0.8 + scuff * 0.30, 0, 1));
           col.lerp(GRASS_PAL.shade, moist * 0.5);
-          col.lerp(GRASS_PAL.blue, smoothstep(0.35, 0.75, h4) * 0.28);
-          const v = 0.80 + 0.42 * h3;
+          col.lerp(GRASS_PAL.blue, smoothstep(0.30, 0.80, h4) * 0.55);
+          col.lerp(GRASS_PAL.dry, smoothstep(0.55, 0.95, h0) * 0.30);
+          // thinner cover => drier, more exposed blades, so the bald spots read
+          col.lerp(GRASS_PAL.dry, (1 - cov) * 0.35);
+          // Tuft-to-tuft value spread. Too wide and the brightest tufts catch the
+          // tip highlight as well and the meadow glitters like tinsel; 0.78-1.22
+          // keeps the variegation without the sparkle.
+          const v = 0.78 + 0.44 * h3;
           col.multiplyScalar(v);
           mesh.setColorAt(n, col);
           n++;
@@ -334,7 +452,10 @@ function lobe(rng, noise, r, sx, sy, detail = 1) {
   return g;
 }
 
-const LEAF = [0x6f9a3c, 0x84a844, 0x5f8a36, 0x93ac4e, 0x759b4a];
+// Reference #7's middle plane is "mid-green mid-ground trees" -- plural greens.
+// Five near-identical leaf hues quantise into two colour bins and are a big part of
+// why our frames render 400 distinct colours where the plates render 800-1600.
+const LEAF = [0x6f9a3c, 0x8fae4a, 0x577f38, 0xa3b455, 0x6d9457, 0x84963a, 0x4f7a44];
 const BARK = [0x6d5f4c, 0x7a6b55, 0x5f5344];
 
 function buildTree(rng, noise, kind) {
@@ -400,6 +521,10 @@ export function createTrees(ctx, T, rng) {
   for (let i = 0; i < VARIANTS; i++) geos.push(buildTree(rng, noise, i % 4));
 
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  // canopies scatter light the same way the meadow does (reference #4: broad, very
+  // low intensity diffuse falloff, no specular lobe)
+  mat.onBeforeCompile = (sh) => applyFoliageWrap(sh, 0.40);
+  mat.customProgramCacheKey = () => 'foliagewrap';
   const placements = geos.map(() => []);
 
   const ok = (x, z, minSlope = 0.42) => {
@@ -415,8 +540,13 @@ export function createTrees(ctx, T, rng) {
   };
 
   const q = clamp(ctx.quality.drawDistance / 900, 0.6, 1.6);
-  // ---- copses: trees clump, they do not scatter ----
-  const copses = Math.round(24 * q);
+  // Reference #7 stacks three depth planes and the MIDDLE one is "mid-green
+  // mid-ground trees and rock". pw_11 and pw_15 both carry a real mass of foliage
+  // between the player and the far silhouette; ours put a thin line of saplings on
+  // the horizon and left the middle distance as bare hillside, which is half of why
+  // the frames read as empty and why the upper half of every shot is nothing but
+  // sky. Roughly 1.9x the copses and a wider scatter radius.
+  const copses = Math.round(46 * q);
   for (let i = 0; i < copses; i++) {
     let cx = 0, cz = 0, found = false;
     for (let t = 0; t < 40; t++) {
@@ -441,7 +571,7 @@ export function createTrees(ctx, T, rng) {
     }
   }
   // ---- singles, thinner, to soften copse edges ----
-  for (let i = 0; i < Math.round(70 * q); i++) {
+  for (let i = 0; i < Math.round(150 * q); i++) {
     const a = rng.next() * Math.PI * 2;
     const r = 30 + Math.sqrt(rng.next()) * 370;
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
@@ -506,6 +636,8 @@ export function createBushes(ctx, T, rng) {
     variants.push(mergeGeos(parts));
   }
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  mat.onBeforeCompile = (sh) => applyFoliageWrap(sh, 0.40);
+  mat.customProgramCacheKey = () => 'foliagewrap';
   const q = clamp(ctx.quality.grassDensity ?? 1, 0.3, 1.5);
   const lists = variants.map(() => []);
   const target = Math.round(300 * q);

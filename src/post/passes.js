@@ -210,17 +210,48 @@ export class BloomPass extends Pass {
 }
 
 // ---------------------------------------------------------------------------
-// Depth of field — portrait lens only (reference observation #11)
+// Atmosphere: aerial perspective + depth of field, in ONE depth-sampling pass.
+//
+// Reference #7: "distance is conveyed almost entirely by aerial perspective ...
+// frames stack three clear depth planes: warm saturated foreground grass, mid-green
+// mid-ground trees and rock, and far geometry lifted to a pale blue-white flat
+// silhouette with its saturation crushed to near zero. Fog is not a grey curtain --
+// it is hue-shifted toward the sky colour."
+//
+// Scene FogExp2 alone cannot do that: at the density that keeps the near field clean
+// it has only reached 4% by 100 m, so our mid-ground stayed exactly as crisp and as
+// saturated as the foreground and the frame read flat.
+//
+// Reference #11: a portrait background stays LEGIBLE and low-detail, so the circle of
+// confusion is capped at a small fraction of frame height and the pass is a no-op on
+// wide lenses.
+//
+// WHY THESE ARE ONE PASS: RenderPass draws into the composer's READ buffer and does
+// not swap, so exactly one of the two ping-pong targets owns the depth attachment.
+// A pass that samples that depth texture while rendering INTO the target it is
+// attached to is a feedback loop, and WebGL is entitled to return garbage -- it did,
+// turning the whole portrait frame into flat grey. With a single depth consumer the
+// parity always works out: it reads the target that has depth and writes the one that
+// does not.
+//
+// The sky dome sits at 3200 m and does not write depth, so instead of a depth == 1
+// test (which is within 1e-5 of a 3000 m mountain at this near/far) the haze fades
+// back out past ~1.4 km. Beyond that the horizon skirt runs its own aerial shader.
 // ---------------------------------------------------------------------------
 
-const DOF_FRAG = /* glsl */`
+const ATMOS_FRAG = /* glsl */`
 uniform sampler2D tDiffuse;
 uniform sampler2D tDepth;
 uniform vec2 uTexel;
 uniform float uNear;
 uniform float uFar;
 uniform float uMaxCoc;      // in pixels at the current resolution
-uniform float uStrength;    // lens aperture-ish
+uniform float uStrength;    // lens aperture-ish; 0 disables the blur entirely
+uniform vec3 uFogColor;     // LINEAR, scene-referred: the sky's own horizon radiance
+uniform float uHazeStart;
+uniform float uHazeRange;
+uniform float uHaze;
+uniform float uHazeDesat;
 varying vec2 vUv;
 ${COMMON}
 
@@ -234,7 +265,22 @@ float viewDist(vec2 uv) {
   return -(uNear * uFar) / denom;
 }
 
+vec3 hazed(vec2 uv) {
+  vec3 c = max(texture2D(tDiffuse, uv).rgb, 0.0);
+  if (uHaze <= 0.001) return c;
+  float dist = viewDist(uv);
+  float t = clamp((dist - uHazeStart) / max(uHazeRange, 1.0), 0.0, 1.0);
+  t = t * t * (3.0 - 2.0 * t);
+  float h = uHaze * t * (1.0 - smoothstep(1400.0, 2600.0, dist));
+  // saturation goes first, so the far plane lands as a near-neutral silhouette
+  // rather than a tinted copy of the near plane
+  c = mix(c, vec3(luma(c)), uHazeDesat * h);
+  return mix(c, uFogColor, h);
+}
+
 void main() {
+  if (uStrength <= 0.0) { gl_FragColor = vec4(hazed(vUv), 1.0); return; }
+
   // Autofocus on the centre of frame, biased to the NEAREST of a small cross so a
   // gap between ears focuses on the creature and not on the hill behind it.
   float f = viewDist(vec2(0.5, 0.46));
@@ -249,12 +295,12 @@ void main() {
   coc = clamp(coc, -0.55, 1.0);
   float r = abs(coc) * uMaxCoc;
 
-  if (r < 0.75) { gl_FragColor = vec4(texture2D(tDiffuse, vUv).rgb, 1.0); return; }
+  if (r < 0.75) { gl_FragColor = vec4(hazed(vUv), 1.0); return; }
 
   // 16-tap golden-angle spiral. Neighbours nearer than the focal plane are allowed
   // to bleed forward; sharp foreground pixels are rejected so the creature keeps a
   // clean edge instead of smearing into its own background.
-  vec3 sum = texture2D(tDiffuse, vUv).rgb;
+  vec3 sum = hazed(vUv);
   float wsum = 1.0;
   const int N = 16;
   for (int i = 0; i < N; i++) {
@@ -266,43 +312,54 @@ void main() {
     float sd = viewDist(suv);
     float scoc = abs((1.0 - f / max(sd, 1e-3)) * uStrength) * uMaxCoc;
     float w = clamp((scoc - rad + 1.0) * 0.6, 0.0, 1.0);
-    sum += texture2D(tDiffuse, suv).rgb * w;
+    sum += hazed(suv) * w;
     wsum += w;
   }
   gl_FragColor = vec4(sum / wsum, 1.0);
 }
 `;
 
-export class DofPass extends Pass {
+export class AtmospherePass extends Pass {
   constructor(camera, width, height) {
     super();
     this.camera = camera;
+    // Explicit depth handle. RenderPass writes into the composer's READ buffer and
+    // does not swap, so `readBuffer.depthTexture` is only the live depth for the pass
+    // sitting directly after it.
+    this.depthTexture = null;
     this.material = new THREE.ShaderMaterial({
       uniforms: {
         tDiffuse: { value: null }, tDepth: { value: null },
         uTexel: { value: new THREE.Vector2(1 / width, 1 / height) },
         uNear: { value: 0.1 }, uFar: { value: 4000 },
-        uMaxCoc: { value: 9 }, uStrength: { value: 1.0 },
+        uMaxCoc: { value: 3 }, uStrength: { value: 0.0 },
+        uFogColor: { value: new THREE.Color(0.55, 0.66, 0.80) },
+        uHazeStart: { value: 40 }, uHazeRange: { value: 520 },
+        uHaze: { value: 0.45 }, uHazeDesat: { value: 0.75 },
       },
-      vertexShader: VERT, fragmentShader: DOF_FRAG, depthTest: false, depthWrite: false,
+      vertexShader: VERT, fragmentShader: ATMOS_FRAG, depthTest: false, depthWrite: false,
     });
     this._quad = new FullScreenQuad(this.material);
-    this.enabled = false;
   }
 
   setSize(width, height) {
     this.material.uniforms.uTexel.value.set(1 / width, 1 / height);
-    // keep the blur disc a constant fraction of frame height across resolutions
-    this.material.uniforms.uMaxCoc.value = Math.max(4, height * 0.0125);
+    // Keep the blur disc a constant fraction of frame height across resolutions.
+    // Reference #11: the background behind a portrait subject stays LEGIBLE and
+    // low-detail -- in pw_15 you can still count the trees and read the moss on the
+    // ruin. 1.25% of frame height turned it to mush; 0.42% compresses it without
+    // destroying it.
+    this.material.uniforms.uMaxCoc.value = Math.max(2, height * 0.0042);
   }
 
   render(renderer, writeBuffer, readBuffer) {
     const u = this.material.uniforms;
+    const depth = this.depthTexture ?? readBuffer.depthTexture;
+    if (!depth) { return; }   // no depth attachment: skip rather than break
     u.tDiffuse.value = readBuffer.texture;
-    u.tDepth.value = readBuffer.depthTexture;
+    u.tDepth.value = depth;
     u.uNear.value = this.camera.near;
     u.uFar.value = this.camera.far;
-    if (!u.tDepth.value) { return; }   // no depth attachment: skip rather than break
     if (this.renderToScreen) renderer.setRenderTarget(null);
     else { renderer.setRenderTarget(writeBuffer); if (this.clear) renderer.clear(); }
     this._quad.render(renderer);
@@ -313,7 +370,7 @@ export class DofPass extends Pass {
 
 // ---------------------------------------------------------------------------
 // Grade: bloom composite -> exposure/WB -> ACES -> CDL -> split tone ->
-//        chroma-dependent saturation -> green steer -> sRGB
+//        chroma-dependent saturation -> green steer -> print-white knee -> sRGB
 // ---------------------------------------------------------------------------
 
 const GRADE_FRAG = /* glsl */`
@@ -334,6 +391,8 @@ uniform float uSatLow;
 uniform float uSatHigh;
 uniform float uGreenShift;
 uniform float uGreenSat;
+uniform float uWhite;
+uniform float uKneeStart;
 varying vec2 vUv;
 ${COMMON}
 
@@ -412,6 +471,24 @@ void main() {
   // YELLOW-green. Push green-dominant pixels toward yellow by lifting red.
   col.r += greenMask * uGreenShift * col.g;
 
+  // ---- print white ----
+  // A graded frame does not reach paper white. Every daylight reference plate
+  // measures 0.00-0.04% of pixels above 250 luma; ours was blowing 4.5% of
+  // vista_golden into a flat white hole around the sun, because the sky dome's
+  // radiance near the disc is ~10x over the ACES shoulder and clamps hard.
+  // A hyperbolic knee above uKneeStart asymptotes to uWhite instead of clipping,
+  // so the sun keeps a falloff, and -- the reason this is worth doing rather than
+  // just pulling exposure -- it lets the mid-tone lift the low-sun shots need be
+  // pushed much harder without the sky going to paper.
+  {
+    float mx = max(col.r, max(col.g, col.b));
+    if (mx > uKneeStart) {
+      float head = max(uWhite - uKneeStart, 1e-4);
+      float k = uKneeStart + (mx - uKneeStart) / (1.0 + (mx - uKneeStart) / head);
+      col *= k / max(mx, 1e-4);
+    }
+  }
+
   gl_FragColor = vec4(linearToSRGB(clamp(col, 0.0, 1.0)), 1.0);
 }
 `;
@@ -430,6 +507,7 @@ export function makeGradeMaterial() {
       uHighTint: { value: new THREE.Vector3(1, 1, 1) },
       uSatLow: { value: 0.9 }, uSatHigh: { value: 1.08 },
       uGreenShift: { value: 0.07 }, uGreenSat: { value: 0.93 },
+      uWhite: { value: 0.95 }, uKneeStart: { value: 0.80 },
     },
     vertexShader: VERT, fragmentShader: GRADE_FRAG, depthTest: false, depthWrite: false,
   });

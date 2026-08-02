@@ -86,10 +86,16 @@ export function furMaterial({ map, sheen = 0.0, rim = 0.15, rimColor = 0xffd7a8,
 export function makeContactShadows(texture, max = 48) {
   const geo = new THREE.PlaneGeometry(1, 1);
   geo.rotateX(-Math.PI / 2);
+  // Multiply, spelled out as custom blending: THREE.MultiplyBlending refuses to run
+  // without premultipliedAlpha and falls back to *no* blending, which puts an opaque
+  // white card under every creature. dst = dst * src is what we actually want.
   const mat = new THREE.MeshBasicMaterial({
     map: texture,
     transparent: true,
-    blending: THREE.MultiplyBlending,
+    blending: THREE.CustomBlending,
+    blendEquation: THREE.AddEquation,
+    blendSrc: THREE.ZeroFactor,
+    blendDst: THREE.SrcColorFactor,
     depthWrite: false,
     depthTest: true,
     toneMapped: false,
