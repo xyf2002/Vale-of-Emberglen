@@ -103,7 +103,23 @@ async function main() {
     // call must exist in the page too — it is not in scope just because it is in this file.
     await page.evaluate(`window.__steer = ${steerToNearestCreature.toString()}`);
 
+    // `--minutes 5` used to advance only ~163 simulated seconds, because the scripted
+    // beats simply ran out and the flag merely gated which of them fired. The final
+    // 2.5 minutes of the vertical slice were never exercised, while the harness
+    // reported a five-minute playtest. Extend with generated beats to the real budget.
     const budget = MINUTES * 60;
+    const scriptedEnd = BEATS.length ? BEATS[BEATS.length - 1].t + 20 : 0;
+    const EXTRA = [
+      { label: 'Keeps exploring outward.', act: (g) => { g.hold('forward', true); g.hold('sprint', true); g.run(14); g.hold('sprint', false); } },
+      { label: 'Stops; looks for anything to do.', act: (g) => { g.hold('forward', false); g.look(700, 0); g.run(6); } },
+      { label: 'Tries to interact with whatever is nearest.', act: (g, s) => { window.__steer(g, s); g.run(6); g.tap('offer'); g.run(2); } },
+      { label: 'Doubles back.', act: (g) => { g.look(1600, 0); g.hold('forward', true); g.run(10); g.hold('forward', false); } },
+      { label: 'Stands and watches the world.', act: (g) => { g.run(12); } },
+    ];
+    for (let t = scriptedEnd, k = 0; t < budget; t += 20, k++) {
+      BEATS.push({ t, label: `[extended] ${EXTRA[k % EXTRA.length].label}`, act: EXTRA[k % EXTRA.length].act });
+    }
+
     let i = 0;
     for (const beat of BEATS) {
       if (beat.t > budget) break;

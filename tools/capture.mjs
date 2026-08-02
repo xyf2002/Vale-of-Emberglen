@@ -62,7 +62,10 @@ const CHROME_ARGS = [
 ];
 
 async function main() {
-  await rm(outDir, { recursive: true, force: true });
+  // Only wipe the round when capturing the WHOLE round. `--only` used to delete every
+  // other frame in the directory and then write one file back — which silently destroyed
+  // a round out from under a critic that was reading it.
+  if (!only) await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
 
   const server = await createServer({ server: { port: 0, host: '127.0.0.1' }, logLevel: 'error' });
@@ -87,11 +90,22 @@ async function main() {
     const ready = await page.evaluate(() => window.__game.ready);
     if (ready !== true) throw new Error('game failed to initialise: ' + JSON.stringify(await page.evaluate(() => window.__game.errors)));
 
+    /**
+     * Real isolation between shots. This used to be a comment claiming a fresh page and
+     * a call that merely reset the camera — so state leaked forward: interaction_feed
+     * taps 'offer', which tamed a creature, which was then still tame during the
+     * "creatures left completely alone" behaviour strip. A critic caught the strip
+     * showing "Woolkin will follow you now" in a supposedly interaction-free window.
+     */
+    const freshPage = async () => {
+      await page.goto(`${base}/?capture=1&seed=${SEED}`, { waitUntil: 'load', timeout: 120000 });
+      await page.waitForFunction(() => window.__game?.ready === true, null, { timeout: 180000 });
+    };
+
     for (const shot of SHOTS) {
       if (only && !only.includes(shot.id)) continue;
       const t0 = Date.now();
-      // Fresh page per shot so shots cannot contaminate each other's world state.
-      await page.evaluate(() => { window.__game.setCamera(null); window.__game.releaseAll(); });
+      await freshPage();
       await page.evaluate(`(${shot.setup.toString()})(window.__game)`);
       await page.evaluate(() => window.__game.render());
       const file = path.join(outDir, `${shot.id}.png`);
@@ -108,11 +122,14 @@ async function main() {
       for (const strip of STRIPS) {
         if (only && !only.includes(strip.id)) continue;
         const t0 = Date.now();
-        await page.evaluate(() => { window.__game.setCamera(null); window.__game.releaseAll(); });
+        await freshPage();
         await page.evaluate(`(${strip.setup.toString()})(window.__game)`);
         const frames = [];
         const descs = [];
         for (let i = 0; i < strip.frames; i++) {
+          // re-aim the camera at the subject before each frame, so a strip meant to
+          // show creature behaviour actually holds the creature in shot
+          if (strip.beforeFrame) await page.evaluate(`(${strip.beforeFrame.toString()})(window.__game, ${i})`);
           await page.evaluate(() => window.__game.render());
           const f = path.join(outDir, `${strip.id}_${String(i).padStart(2, '0')}.png`);
           await page.screenshot({ path: f, animations: 'disabled' });

@@ -123,23 +123,69 @@ export const SHOTS = [
   },
 ];
 
-/** Motion strips — the instrument for "believable behaviour", which stills cannot show. */
+/**
+ * Motion strips — the instrument for "believable behaviour", which stills cannot show.
+ *
+ * A motion critic found these strips could not demonstrate the thing they were grading:
+ * the camera was a locked over-shoulder rig at human eye height looking DOWN on 0.5 m
+ * creatures 15-25 m away, the subject drifted to the frame edge and then out of frame
+ * entirely, and 1.2 s sampling cannot show a 0.3-0.5 s acceleration ramp. So each strip
+ * now re-aims at its subject before every frame, sits near creature eye height on a
+ * longer lens, and samples fast enough to resolve the behaviour it claims to test.
+ */
+
+/** camera helper shared by the strips: hold the subject creature at readable scale */
+const TRACK = (g, opts) => {
+  const s = g.state();
+  const p = s.player.pos;
+  const list = (s.creatures && s.creatures.sample) || [];
+  if (!list.length) return;
+  let c = list[0], best = 1e9;
+  for (const k of list) {
+    const d = Math.hypot(k.pos[0] - p[0], k.pos[1] - p[2]);
+    if (d < best) { best = d; c = k; }
+  }
+  const cx = c.pos[0], cz = c.pos[1];
+  const gy = g.groundAt(cx, cz);
+  // stand off along the player->creature axis, near creature eye height
+  const dx = cx - p[0], dz = cz - p[2];
+  const len = Math.max(0.001, Math.hypot(dx, dz));
+  const back = opts.dist;
+  const ex = cx + (dx / len) * -back + (dz / len) * opts.side;
+  const ez = cz + (dz / len) * -back - (dx / len) * opts.side;
+  g.setCamera([ex, g.groundAt(ex, ez) + opts.height, ez], [cx, gy + 0.42, cz], opts.fov);
+};
+
 export const STRIPS = [
   {
     id: 'behaviour_idle',
-    title: 'Creatures left alone for 12s',
-    intent: 'Do they behave like animals with their own agenda when nobody is interacting?',
-    frames: 6,
-    setup: (g) => { g.setTimeOfDay(0.35); g.setCamera(null); g.run(1); },
-    between: (g) => g.run(2.0),
+    title: 'Creatures left alone for ~14s, no interaction whatsoever',
+    intent: 'Do they behave like animals with their own agenda? Rubric criterion 1: no two creatures may share a pose, phase or facing.',
+    frames: 8,
+    // The capture harness now reloads the page before each strip, so no earlier shot's
+    // taming can leak in and make an "interaction-free" window contain a tamed companion.
+    setup: (g) => { g.setTimeOfDay(0.35); g.setCamera(null); g.run(1.5); },
+    beforeFrame: (g) => TRACK(g, { dist: 4.6, side: 2.2, height: 0.95, fov: 44 }),
+    between: (g) => g.run(1.8),
   },
   {
     id: 'behaviour_approach',
     title: 'Player walks toward a creature',
-    intent: 'The Palworld "first contact" beat: notice, assess, react. Is there a legible arc?',
-    frames: 6,
+    intent: 'The Palworld first-contact beat: notice, assess, react. Rubric criteria 5, 8 and 11.',
+    frames: 8,
     setup: (g) => { g.setTimeOfDay(0.4); g.setCamera(null); g.run(0.5); g.hold('forward', true); },
-    between: (g) => g.run(1.2),
+    beforeFrame: (g) => TRACK(g, { dist: 5.2, side: 2.6, height: 1.05, fov: 46 }),
+    between: (g) => g.run(0.7),
     teardown: (g) => g.hold('forward', false),
+  },
+  {
+    id: 'behaviour_startle',
+    title: 'Close-range reaction sampled every 0.25s',
+    intent: 'Rubric criterion 8: starts and stops must be events with a 0.2-0.4s lean-before-translate ramp, not switches. Coarser sampling cannot show this.',
+    frames: 8,
+    setup: (g) => { g.setTimeOfDay(0.45); g.setCamera(null); g.run(2.0); g.hold('sprint', true); g.hold('forward', true); },
+    beforeFrame: (g) => TRACK(g, { dist: 4.0, side: 1.8, height: 0.8, fov: 42 }),
+    between: (g) => g.run(0.25),
+    teardown: (g) => { g.hold('forward', false); g.hold('sprint', false); },
   },
 ];

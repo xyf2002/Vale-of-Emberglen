@@ -635,9 +635,7 @@ export function createBushes(ctx, T, rng) {
     }
     variants.push(mergeGeos(parts));
   }
-  const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
-  mat.onBeforeCompile = (sh) => applyFoliageWrap(sh, 0.40);
-  mat.customProgramCacheKey = () => 'foliagewrap';
+  const mat = new THREE.MeshBasicMaterial({ vertexColors: true });
   const q = clamp(ctx.quality.grassDensity ?? 1, 0.3, 1.5);
   const lists = variants.map(() => []);
   const target = Math.round(300 * q);
