@@ -44,6 +44,9 @@ export function installCaptureApi(game, { errors, THREE }) {
       p?.camera?.setOverride?.({ pos, target, fov });
     },
     spawnCreature(species, x, z) { return game.get('creatures')?.spawn?.(species, x, z); },
+    /** terrain height — shot staging must sit the camera relative to the ground it is
+     *  standing on, not relative to the player, or it ends up buried in a hillside. */
+    groundAt(x, z) { return game.get('world')?.heightAt?.(x, z) ?? 0; },
 
     // ---- observation ----------------------------------------------------
     state() {
@@ -62,6 +65,10 @@ export function installCaptureApi(game, { errors, THREE }) {
       };
     },
   };
+
+  // Direct handles so a critic (or a diagnostic probe) can measure the scene rather
+  // than argue about it — e.g. toggle shadows, read light intensities, count objects.
+  api.internals = { game, get scene() { return game.scene; }, get renderer() { return game.renderer; }, get camera() { return game.camera; } };
 
   window.__game = api;
   window.__THREE = THREE;

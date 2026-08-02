@@ -1,0 +1,424 @@
+import * as THREE from 'three';
+
+/**
+ * GATHERABLES — berry bushes, fallen branches and loose stone, scattered in deliberate
+ * clusters (never an even sprinkle; see reference brief #8) and harvestable with a short
+ * channelled pluck that ends in a physical pop.
+ *
+ * Everything is one InstancedMesh per part, so the whole layer is ~6 draw calls.
+ */
+
+const KINDS = {
+  berry: { label: 'berries', item: 'berry', yieldMin: 2, yieldMax: 4, channel: 0.42, regrow: 55, color: 0xd93a5c, reach: 2.6 },
+  wood: { label: 'sticks', item: 'wood', yieldMin: 2, yieldMax: 3, channel: 0.5, regrow: 70, color: 0x8a6438, reach: 2.4 },
+  stone: { label: 'stone', item: 'stone', yieldMin: 1, yieldMax: 2, channel: 0.62, regrow: 90, color: 0x9aa39a, reach: 2.4 },
+};
+
+/**
+ * Foliage: four overlapping displaced lobes merged into one geometry, so the silhouette
+ * is a clump of rounded masses rather than one smooth egg — the same "convex body,
+ * detail only in the appendages" logic the creatures use, applied to a shrub.
+ */
+function bushGeometry(noise, seed) {
+  const LOBES = [
+    [0.00, 0.44, 0.00, 0.50, 2],
+    [0.30, 0.26, 0.10, 0.38, 1],
+    [-0.26, 0.24, -0.16, 0.35, 1],
+    [0.04, 0.20, -0.30, 0.32, 1],
+  ];
+  const top = new THREE.Color(0x6d8c3e);
+  const mid = new THREE.Color(0x476026);
+  const bot = new THREE.Color(0x27351a);
+  const c = new THREE.Color();
+  const parts = [];
+
+  for (let L = 0; L < LOBES.length; L++) {
+    const [ox, oy, oz, r, det] = LOBES[L];
+    const g = new THREE.IcosahedronGeometry(r, det);
+    const p = g.attributes.position;
+    const colors = new Float32Array(p.count * 3);
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+      const n = noise((x + ox) * 4.4 + seed + L, (z + oz) * 4.4 - seed) * 0.55
+        + noise((y + oy) * 7.3 - seed, (x + ox) * 7.3 + L) * 0.3;
+      const k = 1 + n * 0.3;
+      const px = x * k + ox, py = y * k * 0.92 + oy, pz = z * k + oz;
+      p.setXYZ(i, px, py, pz);
+      const up = THREE.MathUtils.clamp(py / 0.85, 0, 1);
+      if (up > 0.5) c.copy(mid).lerp(top, (up - 0.5) * 2);
+      else c.copy(bot).lerp(mid, up * 2);
+      c.offsetHSL(n * 0.025, n * 0.05, n * 0.06);
+      colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+    }
+    g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    g.deleteAttribute('uv');
+    g.deleteAttribute('normal');
+    g.computeVertexNormals();
+    parts.push(g);
+  }
+
+  const merged = mergeGeometries(parts, false) ?? parts[0];
+  merged.computeVertexNormals();
+  merged.computeBoundingSphere();
+  return merged;
+}
+
+/** tiny local merge so we do not depend on the examples/ tree */
+function mergeGeometries(list) {
+  let total = 0;
+  for (const g of list) total += g.attributes.position.count;
+  const pos = new Float32Array(total * 3);
+  const col = new Float32Array(total * 3);
+  const nrm = new Float32Array(total * 3);
+  let o = 0;
+  for (const g of list) {
+    const gp = g.attributes.position.array;
+    const gc = g.attributes.color.array;
+    const gn = g.attributes.normal.array;
+    const idx = g.index;
+    if (idx) {
+      // expand indexed -> non-indexed so the merge stays trivial
+      for (let i = 0; i < idx.count; i++) {
+        const v = idx.getX(i);
+        pos[o * 3] = gp[v * 3]; pos[o * 3 + 1] = gp[v * 3 + 1]; pos[o * 3 + 2] = gp[v * 3 + 2];
+        col[o * 3] = gc[v * 3]; col[o * 3 + 1] = gc[v * 3 + 1]; col[o * 3 + 2] = gc[v * 3 + 2];
+        nrm[o * 3] = gn[v * 3]; nrm[o * 3 + 1] = gn[v * 3 + 1]; nrm[o * 3 + 2] = gn[v * 3 + 2];
+        o++;
+      }
+    } else {
+      for (let v = 0; v < g.attributes.position.count; v++) {
+        pos[o * 3] = gp[v * 3]; pos[o * 3 + 1] = gp[v * 3 + 1]; pos[o * 3 + 2] = gp[v * 3 + 2];
+        col[o * 3] = gc[v * 3]; col[o * 3 + 1] = gc[v * 3 + 1]; col[o * 3 + 2] = gc[v * 3 + 2];
+        nrm[o * 3] = gn[v * 3]; nrm[o * 3 + 1] = gn[v * 3 + 1]; nrm[o * 3 + 2] = gn[v * 3 + 2];
+        o++;
+      }
+    }
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0, o * 3), 3));
+  out.setAttribute('color', new THREE.BufferAttribute(col.subarray(0, o * 3), 3));
+  out.setAttribute('normal', new THREE.BufferAttribute(nrm.subarray(0, o * 3), 3));
+  return out;
+}
+
+/** angular rock with moss baked into the upward faces only (brief #8) */
+function rockGeometry(noise, seed) {
+  const g = new THREE.IcosahedronGeometry(0.5, 1);
+  const p = g.attributes.position;
+  const colors = new Float32Array(p.count * 3);
+  const stone = new THREE.Color(0x7f8479);
+  const moss = new THREE.Color(0x5c7238);
+  const c = new THREE.Color();
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    const n = noise(x * 2.6 + seed, z * 2.6 + seed);
+    const k = 1 + n * 0.42;
+    p.setXYZ(i, x * k * 1.25, y * k * 0.78, z * k);
+    const up = THREE.MathUtils.clamp(y / 0.45, 0, 1);
+    const mossAmt = THREE.MathUtils.clamp((up - 0.25) * 1.6 + n * 0.4, 0, 1) * 0.85;
+    c.copy(stone).lerp(moss, mossAmt);
+    c.offsetHSL(0, 0, n * 0.05);
+    colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  g.computeVertexNormals();
+  return g;
+}
+
+function branchGeometry() {
+  const g = new THREE.CylinderGeometry(0.028, 0.045, 0.95, 5, 1);
+  g.rotateZ(Math.PI / 2);
+  const p = g.attributes.position;
+  const colors = new Float32Array(p.count * 3);
+  const a = new THREE.Color(0x7a5a33), b = new THREE.Color(0x4e3a22);
+  const c = new THREE.Color();
+  for (let i = 0; i < p.count; i++) {
+    const t = (p.getX(i) / 0.95) + 0.5;
+    c.copy(b).lerp(a, THREE.MathUtils.clamp(t, 0, 1));
+    colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  return g;
+}
+
+export function createResources(ctx, world, fx) {
+  const rng = ctx.rng.fork(0x51be7);
+  const noise = ctx.noise;
+  const nodes = [];
+
+  const MAX_BUSH = 96, MAX_BERRY = 620, MAX_ROCK = 90, MAX_BRANCH = 120;
+
+  const bushMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.94, metalness: 0, flatShading: false });
+  const berryMat = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: false, roughness: 0.42, metalness: 0 });
+  const rockMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, flatShading: true });
+  const branchMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0 });
+
+  const bushes = new THREE.InstancedMesh(bushGeometry(noise, 3.7), bushMat, MAX_BUSH);
+  const berries = new THREE.InstancedMesh(new THREE.SphereGeometry(0.08, 8, 6), berryMat, MAX_BERRY);
+  const rocks = new THREE.InstancedMesh(rockGeometry(noise, 11.3), rockMat, MAX_ROCK);
+  const branches = new THREE.InstancedMesh(branchGeometry(), branchMat, MAX_BRANCH);
+
+  for (const m of [bushes, berries, rocks, branches]) {
+    m.castShadow = true;
+    m.receiveShadow = true;
+    m.frustumCulled = false;
+    m.count = 0;
+    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    ctx.scene.add(m);
+  }
+  berries.castShadow = false;
+  branches.castShadow = false;
+  berries.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_BERRY * 3), 3);
+  berries.instanceColor.setUsage(THREE.DynamicDrawUsage);
+
+  const M = new THREE.Matrix4();
+  const Q = new THREE.Quaternion();
+  const E = new THREE.Euler();
+  const V = new THREE.Vector3();
+  const S = new THREE.Vector3();
+  const berryCol = new THREE.Color();
+
+  let bushN = 0, berryN = 0, rockN = 0, branchN = 0;
+
+  function setInst(mesh, i, x, y, z, rx, ry, rz, sx, sy, sz) {
+    E.set(rx, ry, rz); Q.setFromEuler(E);
+    V.set(x, y, z); S.set(sx, sy, sz);
+    M.compose(V, Q, S);
+    mesh.setMatrixAt(i, M);
+  }
+
+  // ---- placement -----------------------------------------------------------
+
+  function placeCluster(kind, cx, cz) {
+    const y = world?.heightAt?.(cx, cz) ?? 0;
+    const node = {
+      id: nodes.length + 1, kind,
+      position: new THREE.Vector3(cx, y, cz),
+      def: KINDS[kind],
+      label: KINDS[kind].label,
+      ready: true, channel: 0, cool: 0, shake: 0, shakeSeed: rng.next() * 10,
+      parts: [], berryIdx: [],
+    };
+
+    if (kind === 'berry') {
+      const n = rng.int(2, 4);
+      for (let i = 0; i < n && bushN < MAX_BUSH; i++) {
+        const a = rng.next() * Math.PI * 2, r = i === 0 ? 0 : rng.range(0.5, 1.35);
+        const x = cx + Math.cos(a) * r, z = cz + Math.sin(a) * r;
+        const gy = world?.heightAt?.(x, z) ?? 0;
+        const s = rng.range(0.95, 1.35) * (i === 0 ? 1.22 : 1);
+        const ry = rng.next() * 6.28;
+        const idx = bushN++;
+        const by0 = gy - s * 0.05;
+        node.parts.push({ mesh: bushes, i: idx, x, y: by0, z, ry, s });
+        setInst(bushes, idx, x, by0, z, 0, ry, 0, s, s * 0.96, s);
+        // berries hung on the outside of the upper lobes, 6-10 per bush
+        const nb = rng.int(6, 10);
+        for (let b = 0; b < nb && berryN < MAX_BERRY; b++) {
+          const ba = rng.next() * Math.PI * 2;
+          const bel = rng.range(0.1, 0.95);
+          const rr = s * (0.26 + 0.42 * Math.sqrt(Math.max(0, 1 - bel * bel)));
+          const bx = x + Math.cos(ba) * rr;
+          const bz = z + Math.sin(ba) * rr;
+          const byy = by0 + s * (0.16 + bel * 0.7);
+          const bi = berryN++;
+          const sc = rng.range(0.85, 1.35);
+          setInst(berries, bi, bx, byy, bz, 0, 0, 0, sc, sc, sc);
+          berryCol.setHSL((rng.range(0.965, 1.015) + 1) % 1, rng.range(0.86, 0.98), rng.range(0.28, 0.4));
+          berries.setColorAt(bi, berryCol);
+          node.berryIdx.push({ i: bi, x: bx, y: byy, z: bz, s: sc, on: true });
+        }
+      }
+    } else if (kind === 'wood') {
+      const n = rng.int(3, 5);
+      for (let i = 0; i < n && branchN < MAX_BRANCH; i++) {
+        const a = rng.next() * Math.PI * 2, r = i === 0 ? 0 : rng.range(0.15, 0.72);
+        const x = cx + Math.cos(a) * r, z = cz + Math.sin(a) * r;
+        const gy = world?.heightAt?.(x, z) ?? 0;
+        const idx = branchN++;
+        const s = rng.range(0.75, 1.25);
+        const ry = rng.next() * 6.28;
+        const rz = rng.range(-0.16, 0.16);
+        setInst(branches, idx, x, gy + 0.05 * s, z, rng.range(-0.1, 0.1), ry, rz, s, s, s);
+        node.parts.push({ mesh: branches, i: idx, x, y: gy + 0.05 * s, z, ry, rz, s });
+      }
+    } else {
+      const n = rng.int(2, 4);
+      for (let i = 0; i < n && rockN < MAX_ROCK; i++) {
+        const a = rng.next() * Math.PI * 2, r = i === 0 ? 0 : rng.range(0.4, 1.0);
+        const x = cx + Math.cos(a) * r, z = cz + Math.sin(a) * r;
+        const gy = world?.heightAt?.(x, z) ?? 0;
+        const s = rng.range(0.42, 0.95) * (i === 0 ? 1.3 : 1);
+        const ry = rng.next() * 6.28;
+        const idx = rockN++;
+        setInst(rocks, idx, x, gy + s * 0.16, z, rng.range(-0.12, 0.12), ry, rng.range(-0.12, 0.12), s, s, s);
+        node.parts.push({ mesh: rocks, i: idx, x, y: gy + s * 0.16, z, ry, s });
+      }
+    }
+
+    if (!node.parts.length) return null;
+    nodes.push(node);
+    return node;
+  }
+
+  function scatter(kind, count, near, radius) {
+    let made = 0;
+    for (let t = 0; t < count * 8 && made < count; t++) {
+      const spot = world?.sampleSpawn?.(rng, { maxSlope: 0.26, near, radius });
+      if (!spot) continue;
+      // keep clusters apart so they read as pockets, not noise
+      let tooClose = false;
+      for (const n of nodes) {
+        if (n.position.distanceToSquared({ x: spot.x, y: n.position.y, z: spot.z }) < 64) { tooClose = true; break; }
+      }
+      if (tooClose) continue;
+      if (placeCluster(kind, spot.x, spot.z)) made++;
+    }
+    return made;
+  }
+
+  return {
+    nodes,
+    kinds: KINDS,
+
+    /** seed the world; call after the player exists so the first pockets are findable */
+    populate(playerPos) {
+      if (playerPos) {
+        scatter('berry', 4, playerPos, 46);
+        scatter('wood', 3, playerPos, 52);
+        scatter('stone', 2, playerPos, 58);
+      }
+      scatter('berry', 12);
+      scatter('wood', 9);
+      scatter('stone', 7);
+      bushes.count = bushN; berries.count = berryN; rocks.count = rockN; branches.count = branchN;
+      for (const m of [bushes, berries, rocks, branches]) m.instanceMatrix.needsUpdate = true;
+      if (berries.instanceColor) berries.instanceColor.needsUpdate = true;
+      return nodes.length;
+    },
+
+    /** nearest harvestable node within reach of a position */
+    nearest(pos, extra = 0) {
+      let best = null, bd = Infinity;
+      for (const n of nodes) {
+        const reach = n.def.reach + extra;
+        const d = n.position.distanceToSquared(pos);
+        if (d < reach * reach && d < bd) { bd = d; best = n; }
+      }
+      return best;
+    },
+
+    beginGather(node) {
+      if (!node || !node.ready || node.channel > 0) return false;
+      node.channel = node.def.channel;
+      node.shake = 1;
+      return true;
+    },
+
+    cancelGather(node) {
+      if (node && node.channel > 0) { node.channel = 0; node.shake = 0.35; }
+    },
+
+    /** advance channels + shake + regrowth. returns array of completed harvests */
+    update(dt) {
+      const done = [];
+      for (const n of nodes) {
+        if (n.channel > 0) {
+          n.channel -= dt;
+          n.shake = Math.min(1, n.shake + dt * 3.2);
+          // steady drip of leaf motes while plucking
+          if (fx && rng.next() < dt * 26) {
+            fx.trail(
+              { x: n.position.x + rng.range(-0.5, 0.5), y: n.position.y + rng.range(0.3, 0.9), z: n.position.z + rng.range(-0.5, 0.5) },
+              n.kind === 'berry' ? 0xd8f0a0 : n.kind === 'wood' ? 0xc9a878 : 0xcfd6c8, 0.05, 0.4);
+          }
+          if (n.channel <= 0) {
+            n.channel = 0;
+            done.push(harvest(n));
+          }
+        }
+        if (n.shake > 0 && n.channel <= 0) n.shake = Math.max(0, n.shake - dt * 2.6);
+        if (n.shake > 0) animate(n);
+        if (!n.ready) {
+          n.cool -= dt;
+          if (n.cool <= 0) regrow(n);
+        }
+      }
+      return done;
+    },
+
+    snapshot() {
+      return {
+        nodes: nodes.length,
+        ready: nodes.filter((n) => n.ready).length,
+        byKind: nodes.reduce((a, n) => (a[n.kind] = (a[n.kind] || 0) + 1, a), {}),
+      };
+    },
+  };
+
+  function animate(n) {
+    const t = ctx.elapsed * 17 + n.shakeSeed * 7;
+    const amp = n.shake * 0.075;
+    for (const p of n.parts) {
+      const wob = Math.sin(t + p.i * 1.7) * amp;
+      const wob2 = Math.cos(t * 0.83 + p.i) * amp * 0.7;
+      if (p.mesh === bushes) setInst(bushes, p.i, p.x + wob * 0.35, p.y + Math.abs(wob) * 0.2, p.z + wob2 * 0.35, wob, p.ry, wob2, p.s, p.s * 0.96 * (1 - n.shake * 0.05), p.s);
+      else if (p.mesh === branches) setInst(branches, p.i, p.x, p.y + Math.abs(wob) * 0.4, p.z, wob * 0.5, p.ry, p.rz + wob2, p.s, p.s, p.s);
+      else setInst(rocks, p.i, p.x + wob * 0.2, p.y, p.z + wob2 * 0.2, 0, p.ry, 0, p.s, p.s, p.s);
+      p.mesh.instanceMatrix.needsUpdate = true;
+    }
+  }
+
+  function harvest(n) {
+    const amount = rng.int(n.def.yieldMin, n.def.yieldMax);
+    n.ready = false;
+    n.cool = n.def.regrow;
+    n.shake = 1;
+
+    const centre = n.position;
+    if (n.kind === 'berry') {
+      // pop the actual berries off the bush, one particle burst each
+      const live = n.berryIdx.filter((b) => b.on);
+      const take = live.slice(0, Math.max(amount, 3));
+      for (const b of live) {
+        b.on = false;
+        setInst(berries, b.i, b.x, b.y, b.z, 0, 0, 0, 0.0001, 0.0001, 0.0001);
+      }
+      berries.instanceMatrix.needsUpdate = true;
+      for (const b of take) {
+        fx?.burst({ x: b.x, y: b.y, z: b.z }, {
+          n: 5, color: 0xff5a7d, speed: 1.6, size: 0.075, life: 0.5, up: 1.5,
+          debris: 2, debrisColor: 0xb8264a,
+        });
+      }
+      fx?.burst({ x: centre.x, y: centre.y + 0.55, z: centre.z }, { n: 10, color: 0xffe2a0, speed: 1.5, size: 0.07, life: 0.55, up: 1.1, debris: 5, debrisColor: 0x4e6b2c, spread: 6 });
+    } else if (n.kind === 'wood') {
+      for (const p of n.parts) setInst(branches, p.i, p.x, p.y - 0.4, p.z, 0, p.ry, p.rz, 0.0001, 0.0001, 0.0001);
+      branches.instanceMatrix.needsUpdate = true;
+      fx?.burst({ x: centre.x, y: centre.y + 0.2, z: centre.z }, { n: 10, color: 0xe0c08a, speed: 1.9, size: 0.07, life: 0.5, up: 1.3, debris: 8, debrisColor: 0x6b4a2a, spread: 4 });
+    } else {
+      for (const p of n.parts) setInst(rocks, p.i, p.x, p.y - 0.5, p.z, 0, p.ry, 0, 0.0001, 0.0001, 0.0001);
+      rocks.instanceMatrix.needsUpdate = true;
+      fx?.burst({ x: centre.x, y: centre.y + 0.25, z: centre.z }, { n: 9, color: 0xdfe4d8, speed: 1.7, size: 0.075, life: 0.45, up: 1.2, debris: 9, debrisColor: 0x7c8378, spread: 4 });
+    }
+
+    fx?.ring(centre, { r0: 0.3, r1: 1.7, dur: 0.6, color: n.kind === 'berry' ? 0xffb3c4 : 0xffe0aa, opacity: 0.7 });
+    return { node: n, kind: n.kind, item: n.def.item, amount, position: centre };
+  }
+
+  function regrow(n) {
+    n.ready = true;
+    n.shake = 0.5;
+    if (n.kind === 'berry') {
+      for (const b of n.berryIdx) { b.on = true; setInst(berries, b.i, b.x, b.y, b.z, 0, 0, 0, b.s, b.s, b.s); }
+      berries.instanceMatrix.needsUpdate = true;
+    } else if (n.kind === 'wood') {
+      for (const p of n.parts) setInst(branches, p.i, p.x, p.y, p.z, 0, p.ry, p.rz, p.s, p.s, p.s);
+      branches.instanceMatrix.needsUpdate = true;
+    } else {
+      for (const p of n.parts) setInst(rocks, p.i, p.x, p.y, p.z, 0, p.ry, 0, p.s, p.s, p.s);
+      rocks.instanceMatrix.needsUpdate = true;
+    }
+    fx?.ring(n.position, { r0: 0.2, r1: 1.1, dur: 0.8, color: 0xbfe89a, opacity: 0.35 });
+  }
+}

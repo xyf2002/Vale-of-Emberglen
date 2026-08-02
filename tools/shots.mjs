@@ -50,11 +50,17 @@ export const SHOTS = [
       g.setCamera(null);
       g.run(0.3);
       const s = g.state();
-      const [px, py, pz] = s.player.pos;   // use the player's ground height, not y=0
-      g.spawnCreature('woolkin', px + 3, pz + 3);
+      const [px, , pz] = s.player.pos;
+      // Stage subject and camera against the ground each one actually stands on.
+      // Using the player's height for both buries the camera whenever the terrain rises.
+      const cx = px + 3, cz = pz + 3;
+      const cy = g.groundAt(cx, cz);
+      const ex = px + 5.0, ez = pz + 5.1;
+      const ey = g.groundAt(ex, ez) + 1.15;   // above the grass line, near creature eye height
+      g.spawnCreature('woolkin', cx, cz);
       g.run(0.5);
       // longer lens, creature filling 55-75% of frame height — per reference observation #11
-      g.setCamera([px + 4.5, py + 1.05, pz + 4.8], [px + 3, py + 0.5, pz + 3], 38);
+      g.setCamera([ex, ey, ez], [cx, cy + 0.45, cz], 38);
       g.run(0.8);
     },
   },

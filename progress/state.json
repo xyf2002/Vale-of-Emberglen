@@ -1,23 +1,51 @@
 {
   "goal": "A 5-minute playable vertical slice that captures the core fantasy of Palworld: a beautiful third-person world, charming creatures, meaningful interaction, and believable creature behaviour.",
   "bar": "The real Palworld. A fresh critic is shown our capture beside an official Palworld frame — same shot type, same resolution, same format, labels stripped, order shuffled — and asked which one is the shipped commercial game. We are done when critics stop reliably picking correctly.",
-  "currentRound": "r01",
-  "currentState": "round 1 building — 9 system builders + integration",
-  "pickRate": null,
+  "currentRound": "r02",
+  "currentState": "round 2 — rendering pipeline: fix overexposure, zero shadow structure, flat desaturated grade",
+  "pickRate": 0.0,
   "openGaps": [
-    "Everything: the build is a stub baseline — noise terrain, capsule player, sphere creatures, flat lighting.",
+    "Rendering pipeline blows the frame out: up to 47% clipped highlights, darkest pixel ~90-96/255 (no shadow structure anywhere), flat desaturated grade (~500-700 unique colors vs Palworld's 850-1600), low edge detail in creature portrait and dusk mid-ground. Every one of our 5 comp shots was correctly identified as NOT the commercial game.",
     "Reference gap: only 1 of 17 official stills is early-game peaceful exploration, so interaction_feed has no honest comp and is judged on the art-direction rubric instead.",
     "Reference gap: the trailer never shows a creature noticing an approaching player, so behaviour_approach has no fair comp either and is graded against the 12 written aliveness criteria."
   ],
   "rounds": [
     {
+      "id": "r02",
+      "title": "Rendering pipeline: kill the blown-out wash, restore shadow structure and colour",
+      "date": "2026-08-02",
+      "status": "running",
+      "summary": "Blind critic B (pixel-forensic, 5/5 correct) proved our frames are destroyed by the render chain: 47% clipped highlights, no shadows (darkest pixel 96/255), flat palette (500-700 colors vs 850-1600), low detail. Runtime diagnostics show the scene is rich (142 draws, 586k tris, 8860 grass blades) and post is enabled with ACES — so the image is being wrecked between scene render and final pixels. Suspects: colour-space double-encoding (SRGB output + HalfFloat RT + manual ACES/linearToSRGB re-applied), sun intensity 3.52 in physical-light units, and shadow maps not reaching materials. A deep builder owns the fix and must prove it with forensic deltas, not opinion.",
+      "improvements": [],
+      "gaps": [],
+      "verdicts": [
+        { "shot": "vista_golden", "oursPicked": true, "note": "critic identified ours 5/5: blown-out 47% clipped, zero shadow structure" },
+        { "shot": "overshoulder_meadow", "oursPicked": true, "note": "701 colors / 0.207 sat vs ref 1584 / 0.304" },
+        { "shot": "creature_portrait", "oursPicked": true, "note": "37% clipped, creature reads as smooth untextured blob (edge 1.9 vs 9.8)" },
+        { "shot": "creature_group", "oursPicked": true, "note": "705 colors / 0.181 sat / 16.5% blown" },
+        { "shot": "dusk_mood", "oursPicked": true, "note": "511 colors, banded sky, empty mid-ground" }
+      ]
+    },
+    {
       "id": "r01",
       "title": "Nine systems built in parallel, then integrated",
       "date": "2026-08-02",
-      "status": "running",
-      "summary": "Nine builder agents with fresh context, each owning one disjoint system directory, each required to read the art-direction brief, look at the real reference screenshots, and verify against their own rendered output. Then an integration pass to make nine independent parts cohere.",
-      "improvements": [],
-      "gaps": []
+      "status": "done",
+      "summary": "Nine builder agents with fresh context, each owning one disjoint system directory, each required to read the art-direction brief, look at the real reference screenshots, and verify against their own rendered output. Then an integration pass to make nine independent parts cohere. Integration capture succeeded (6 shots + 2 strips, all frames passed the probe), but blind A/B against real Palworld frames was 0/5: the rendering pipeline washes the image out.",
+      "improvements": [
+        "All nine systems (world, sky, player, creatures, ai, interaction, ui, audio, post) built and integrated; capture reports OK with 143-170 draws and 590-830k triangles",
+        "Runtime diagnostics prove the scene is content-rich (8860 grass blades, 266 trees, 306 rocks, 14 creatures) and the post chain runs with zero failures"
+      ],
+      "gaps": [
+        "Blind A/B verdict 0/5: every studio frame correctly identified as not-the-commercial-game (overexposure, no shadows, flat grade, low detail)"
+      ],
+      "verdicts": [
+        { "shot": "vista_golden", "oursPicked": true, "note": "critic identified ours 5/5: blown-out 47% clipped, zero shadow structure" },
+        { "shot": "overshoulder_meadow", "oursPicked": true, "note": "701 colors / 0.207 sat vs ref 1584 / 0.304" },
+        { "shot": "creature_portrait", "oursPicked": true, "note": "37% clipped, creature reads as smooth untextured blob (edge 1.9 vs 9.8)" },
+        { "shot": "creature_group", "oursPicked": true, "note": "705 colors / 0.181 sat / 16.5% blown" },
+        { "shot": "dusk_mood", "oursPicked": true, "note": "511 colors, banded sky, empty mid-ground" }
+      ]
     },
     {
       "id": "smoke",

@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 import { ORDER } from '../engine/Game.js';
+import { buildAvatar, RIG } from './Avatar.js';
+import { createAnimator } from './Animator.js';
+import { createCameraRig, CAM } from './CameraRig.js';
 
 /**
  * PLAYER SYSTEM — owned by the player builder. Owns the avatar, its animation, and the
@@ -16,126 +19,376 @@ import { ORDER } from '../engine/Game.js';
  *   state -> 'idle'|'walk'|'run'|'jump'|'fall'|'crouch'|'interact'
  *   root -> THREE.Object3D           so other systems can parent effects
  *
- * STUB: a capsule that slides over the terrain with an orbit camera.
+ * ADDED (safe to use, additive only):
+ *   bodyYaw -> number                where the avatar is actually facing
+ *   eyePosition -> THREE.Vector3     head position, for aiming / dialogue
+ *   handPosition(out?) -> Vector3    right hand in world space (attach props here)
+ *   playGesture(kind)                'offer' | 'pet' — one-shot upper-body animation
+ *   grounded, sprintAmount, crouchAmount
  */
+
+const clamp = THREE.MathUtils.clamp;
+const damp = (a, b, l, dt) => a + (b - a) * (1 - Math.exp(-l * dt));
+
+const MOVE = {
+  walk: 3.9,
+  sprint: 6.9,
+  crouch: 1.85,
+  accel: 32,
+  reverseBoost: 1.7,
+  decel: 26,
+  airAccel: 12,
+  gravity: 23.0,
+  fallGravity: 31.0,
+  jumpVel: 7.5,
+  jumpCut: 0.42,
+  coyote: 0.12,
+  buffer: 0.16,
+  anticipation: 0.055,
+  stepSnap: 0.45,
+  slideSlope: 0.66,
+};
+
 export function createPlayer() {
-  let ctx, world;
+  let ctx, world, avatar, anim, sky;
   const position = new THREE.Vector3(0, 0, 0);
   const velocity = new THREE.Vector3();
-  let yaw = 0, pitch = -0.12, camDist = 6.5, grounded = true, state = 'idle';
-  let root, override = null;
-  const camTarget = new THREE.Vector3();
+  const cam = createCameraRig();
+
+  let yaw = 0;              // aim / camera yaw (the public `yaw`)
+  let bodyYaw = 0;          // where the avatar faces
+  let grounded = true, wasGrounded = true, state = 'idle';
+  let sprintT = 0, crouchT = 0, turnRate = 0, accelFwd = 0;
+  let coyote = 0, buffer = 0, anticipT = -1;
+  let framingT = 0;
+  let root, contact, contactMat;
+  let focusPos = null;
+  const focusVec = new THREE.Vector3();
+
+  const fwd = new THREE.Vector3();
+  const right = new THREE.Vector3();
+  const wish = new THREE.Vector3();
+  const hv = new THREE.Vector3();
+  const dv = new THREE.Vector3();
   const tmp = new THREE.Vector3();
+  const rimColor = new THREE.Color();
+
+  const groundAt = (x, z) => world?.heightAt?.(x, z) ?? 0;
 
   const camera = {
-    setOverride(o) { override = o; },
-    get override() { return override; },
+    setOverride(o) { cam.setOverride(o); },
+    get override() { return cam.override; },
+    get yaw() { return cam.yaw; },
+    get pitch() { return cam.pitch; },
+    snap() { cam.snap(); },
+    rig: cam,
   };
 
-  return {
+  function makeContactShadow() {
+    const size = 128;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = size;
+    const g = cv.getContext('2d');
+    const grd = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    // hard-ish inner core with ~0.2 m of falloff (reference note #9)
+    grd.addColorStop(0.00, 'rgba(0,0,0,0.85)');
+    grd.addColorStop(0.34, 'rgba(0,0,0,0.72)');
+    grd.addColorStop(0.62, 'rgba(0,0,0,0.28)');
+    grd.addColorStop(1.00, 'rgba(0,0,0,0.0)');
+    g.fillStyle = grd;
+    g.fillRect(0, 0, size, size);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    contactMat = new THREE.MeshBasicMaterial({
+      map: tex, transparent: true, depthWrite: false, opacity: 0.55,
+      color: 0x1b2415, blending: THREE.NormalBlending,
+    });
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 0.95), contactMat);
+    m.rotation.x = -Math.PI / 2;
+    m.renderOrder = 2;
+    m.frustumCulled = false;
+    return m;
+  }
+
+  const api = {
     name: 'player',
     order: ORDER.PLAYER,
     position, velocity, camera,
     get yaw() { return yaw; },
+    get bodyYaw() { return bodyYaw; },
     get state() { return state; },
     get root() { return root; },
+    get grounded() { return grounded; },
+    get sprintAmount() { return sprintT; },
+    get crouchAmount() { return crouchT; },
+    get eyePosition() {
+      const p = new THREE.Vector3();
+      if (avatar) avatar.rig.head.getWorldPosition(p);
+      else p.copy(position).setY(position.y + 1.6);
+      return p;
+    },
+    handPosition(out = new THREE.Vector3()) {
+      if (avatar) avatar.rig.armR.hand.getWorldPosition(out);
+      else out.copy(position);
+      return out;
+    },
+    playGesture(kind = 'offer') {
+      if (!anim) return;
+      anim.startGesture(kind);
+      framingT = 2.6;
+      faceNearestCreature();
+    },
 
     init(c) {
       ctx = c; world = c.get('world');
-      root = new THREE.Group();
-      const body = new THREE.Mesh(
-        new THREE.CapsuleGeometry(0.34, 0.9, 6, 12),
-        new THREE.MeshStandardMaterial({ color: 0xdcc9a8, roughness: 0.7 }));
-      body.position.y = 0.9;
-      body.castShadow = true;
-      root.add(body);
+      avatar = buildAvatar(c.rng.fork(31));
+      anim = createAnimator(avatar);
+      root = avatar.root;
       c.scene.add(root);
-      const spot = world?.sampleSpawn?.(c.rng.fork(7), { maxSlope: 0.2 }) ?? { x: 0, z: 0 };
-      position.set(spot.x, world?.heightAt?.(spot.x, spot.z) ?? 0, spot.z);
+
+      contact = makeContactShadow();
+      c.scene.add(contact);
+
+      const spot = world?.sampleSpawn?.(c.rng.fork(7), { maxSlope: 0.18 }) ?? { x: 0, z: 0 };
+      position.set(spot.x, groundAt(spot.x, spot.z), spot.z);
+      root.position.copy(position);
+      cam.snap();
+
+      c.bus.on('creature:fed', () => { if (!anim.gesturing) api.playGesture('offer'); });
+      c.bus.on('creature:tamed', () => { framingT = Math.max(framingT, 2.0); });
     },
 
     update(dt, c) {
       const input = c.input;
-      // look
-      yaw -= input.look.dx * 0.0026;
-      pitch = THREE.MathUtils.clamp(pitch - input.look.dy * 0.0022, -0.9, 0.75);
-      camDist = THREE.MathUtils.clamp(camDist + input.wheel * 0.7, 2.5, 12);
+      sky = sky ?? c.get('sky');
 
-      // move
+      // ---------------------------------------------------------------- look
+      cam.look(input.look.dx, input.look.dy);
+      cam.zoom(input.wheel);
+      yaw = cam.yaw;
+
+      // ------------------------------------------------------------- intent
       const ax = input.moveAxis();
-      const sprint = input.down('sprint');
-      const speed = sprint ? 8.2 : 4.1;
-      const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
-      const right = new THREE.Vector3(fwd.z, 0, -fwd.x);
-      tmp.set(0, 0, 0).addScaledVector(fwd, ax.y).addScaledVector(right, ax.x);
-      const moving = tmp.lengthSq() > 1e-5;
-      if (moving) tmp.normalize().multiplyScalar(speed);
-      velocity.x = THREE.MathUtils.damp(velocity.x, tmp.x, 12, dt);
-      velocity.z = THREE.MathUtils.damp(velocity.z, tmp.z, 12, dt);
+      const rawMove = Math.hypot(ax.x, ax.y) > 0.02;
+      const crouching = input.down('crouch');
+      const wantSprint = input.down('sprint') && ax.y > 0.25 && !crouching;
 
-      if (grounded && input.justPressed('jump')) { velocity.y = 7.4; grounded = false; }
-      velocity.y -= 21 * dt;
+      // sprint spools up — a sprint with weight does not arrive instantly
+      sprintT = damp(sprintT, wantSprint ? 1 : 0, wantSprint ? 3.6 : 7.5, dt);
+      crouchT = damp(crouchT, crouching && grounded ? 1 : 0, 11, dt);
 
+      fwd.set(-Math.sin(yaw), 0, -Math.cos(yaw));
+      right.set(fwd.z, 0, -fwd.x);
+      wish.set(0, 0, 0).addScaledVector(fwd, ax.y).addScaledVector(right, ax.x);
+      if (rawMove) wish.normalize();
+
+      let maxSpeed = THREE.MathUtils.lerp(MOVE.walk, MOVE.sprint, sprintT);
+      maxSpeed = THREE.MathUtils.lerp(maxSpeed, MOVE.crouch, crouchT);
+      if (anim.gesturing) maxSpeed *= 0.35;
+
+      // uphill costs speed, downhill does not give it back
+      if (rawMove && grounded) {
+        const g0 = groundAt(position.x, position.z);
+        const g1 = groundAt(position.x + wish.x * 0.7, position.z + wish.z * 0.7);
+        const slope = (g1 - g0) / 0.7;
+        maxSpeed *= clamp(1 - Math.max(0, slope) * 0.62, 0.40, 1);
+      }
+
+      // ------------------------------------------------------- acceleration
+      hv.set(velocity.x, 0, velocity.z);
+      tmp.copy(wish).multiplyScalar(rawMove ? maxSpeed : 0);
+      dv.subVectors(tmp, hv);
+      let rate;
+      if (!grounded) rate = MOVE.airAccel;
+      else if (rawMove) {
+        const align = hv.lengthSq() > 0.01 ? wish.dot(hv.clone().normalize()) : 1;
+        rate = MOVE.accel * (align < 0 ? MOVE.reverseBoost : 1);
+      } else rate = MOVE.decel;
+      const step = rate * dt;
+      const dvLen = dv.length();
+      if (dvLen <= step) hv.copy(tmp);
+      else hv.addScaledVector(dv.divideScalar(dvLen), step);
+      if (grounded && !rawMove) hv.multiplyScalar(Math.exp(-5.0 * dt));
+
+      const prevSpeed = Math.hypot(velocity.x, velocity.z);
+      velocity.x = hv.x; velocity.z = hv.z;
+      const curSpeed = Math.hypot(velocity.x, velocity.z);
+      accelFwd = damp(accelFwd, clamp((curSpeed - prevSpeed) / Math.max(dt, 1e-4) / 22, -1, 1), 8, dt);
+
+      // ------------------------------------------------------------- jumping
+      if (input.justPressed('jump')) buffer = MOVE.buffer;
+      buffer = Math.max(0, buffer - dt);
+      coyote = grounded ? MOVE.coyote : Math.max(0, coyote - dt);
+
+      if (anticipT >= 0) {
+        anticipT += dt;
+        anim.setAnticipation(clamp(anticipT / MOVE.anticipation, 0, 1));
+        if (anticipT >= MOVE.anticipation) {
+          velocity.y = MOVE.jumpVel * (1 - crouchT * 0.25);
+          grounded = false; coyote = 0; buffer = 0; anticipT = -1;
+          anim.setAnticipation(0);
+          c.bus.emit('player:jump', { pos: position.clone() });
+        }
+      } else if (buffer > 0 && coyote > 0) {
+        anticipT = 0; buffer = 0;
+      }
+
+      if (!grounded && velocity.y > 0 && input.justReleased('jump')) velocity.y *= MOVE.jumpCut;
+      velocity.y -= (velocity.y > 0 ? MOVE.gravity : MOVE.fallGravity) * dt;
+      velocity.y = Math.max(velocity.y, -38);
+
+      // -------------------------------------------------- integrate + ground
+      wasGrounded = grounded;
       position.addScaledVector(velocity, dt);
-      const g = world?.heightAt?.(position.x, position.z) ?? 0;
-      if (position.y <= g) { position.y = g; velocity.y = 0; grounded = true; }
 
-      const r = (world?.bounds?.radius ?? 400) - 6;
+      const g = groundAt(position.x, position.z);
+      if (velocity.y <= 0) {
+        if (position.y <= g) {
+          const impact = -velocity.y;
+          if (!wasGrounded && impact > 2.2) {
+            anim.notifyLand(impact);
+            c.bus.emit('player:land', { pos: position.clone(), impact: +impact.toFixed(2) });
+          }
+          position.y = g; velocity.y = 0; grounded = true;
+        } else if (wasGrounded && position.y - g < MOVE.stepSnap) {
+          position.y = g; velocity.y = 0; grounded = true;   // walk down slopes, don't hop
+        } else grounded = false;
+      } else grounded = false;
+
+      // steep ground sheds you downhill
+      if (grounded && world?.normalAt) {
+        const n = world.normalAt(position.x, position.z);
+        const slope = 1 - Math.max(0, n.y);
+        if (slope > MOVE.slideSlope) {
+          const push = (slope - MOVE.slideSlope) * 34 * dt;
+          velocity.x += n.x * push; velocity.z += n.z * push;
+        }
+      }
+
+      const r = (world?.bounds?.radius ?? 400) - 8;
       const d = Math.hypot(position.x, position.z);
       if (d > r) { position.x *= r / d; position.z *= r / d; }
 
-      state = !grounded ? (velocity.y > 0 ? 'jump' : 'fall')
-        : moving ? (sprint ? 'run' : 'walk') : 'idle';
+      // -------------------------------------------------------------- verbs
+      if (input.justPressed('offer')) api.playGesture('offer');
+      else if (input.justPressed('interact')) api.playGesture('pet');
 
-      root.position.copy(position);
-      if (moving) {
+      // --------------------------------------------------------- body facing
+      const planar = Math.hypot(velocity.x, velocity.z);
+      const prevBodyYaw = bodyYaw;
+      if (planar > 0.55 && !anim.gesturing) {
         const target = Math.atan2(-velocity.x, -velocity.z);
-        root.rotation.y = dampAngle(root.rotation.y, target, 10, dt);
+        bodyYaw = dampAngle(bodyYaw, target, 13 - sprintT * 3.5, dt);
+      } else if (anim.gesturing && focusPos) {
+        const target = Math.atan2(-(focusPos.x - position.x), -(focusPos.z - position.z));
+        bodyYaw = dampAngle(bodyYaw, target, 8, dt);
+      }
+      turnRate = damp(turnRate, angleDelta(prevBodyYaw, bodyYaw) / Math.max(dt, 1e-4), 10, dt);
+
+      // ---------------------------------------------------------------- state
+      state = anim.gesturing ? 'interact'
+        : !grounded ? (velocity.y > 0.2 ? 'jump' : 'fall')
+          : crouchT > 0.5 ? 'crouch'
+            : planar > 0.4 ? (sprintT > 0.45 ? 'run' : 'walk')
+              : 'idle';
+
+      // ---------------------------------------------------------------- pose
+      root.position.copy(position);
+      root.rotation.y = bodyYaw;
+      anim.update(dt, {
+        speed: planar, grounded, crouch: crouching && grounded,
+        velY: velocity.y, bodyYaw, pos: position, turnRate,
+        accelFwd, lookPitch: cam.pitch * 0.5, lookYaw: 0,
+      }, groundAt);
+
+      // ------------------------------------------------------ contact shadow
+      const cg = groundAt(position.x, position.z);
+      const airGap = clamp((position.y - cg) / 1.6, 0, 1);
+      contact.position.set(position.x, cg + 0.035, position.z);
+      const spread = 1 + airGap * 0.5;
+      contact.scale.set(spread, spread, 1);
+      contactMat.opacity = (0.52 - airGap * 0.34) * (1 - crouchT * 0.12);
+      if (world?.normalAt) {
+        const n = world.normalAt(position.x, position.z);
+        contact.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
       }
 
-      // camera
-      const cam = c.camera;
-      if (override) {
-        cam.position.set(...override.pos);
-        cam.lookAt(new THREE.Vector3(...override.target));
-        if (override.fov && cam.fov !== override.fov) { cam.fov = override.fov; cam.updateProjectionMatrix(); }
-      } else {
-        if (cam.fov !== 55) { cam.fov = 55; cam.updateProjectionMatrix(); }
-        camTarget.copy(position).add(new THREE.Vector3(0, 1.55, 0));
-        const dir = new THREE.Vector3(
-          Math.sin(yaw) * Math.cos(pitch), -Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
-        const want = camTarget.clone().addScaledVector(dir, camDist).addScaledVector(
-          new THREE.Vector3(dir.z, 0, -dir.x).normalize(), 0.55);
-        const gh = (world?.heightAt?.(want.x, want.z) ?? 0) + 0.6;
-        want.y = Math.max(want.y, gh);
-        cam.position.lerp(want, 1 - Math.exp(-9 * dt));
-        cam.lookAt(camTarget);
+      // ----------------------------------------------------------- rim light
+      if (sky?.getSunColor) {
+        const sd = sky.getSunDirection?.() ?? { y: 0.7 };
+        const day = clamp(sd.y ?? 0.7, 0, 1);
+        rimColor.copy(sky.getSunColor()).lerp(new THREE.Color(0.75, 0.85, 1.0), 0.35);
+        avatar.setRim(rimColor, 0.10 + day * 0.16);
       }
+
+      // -------------------------------------------------------------- camera
+      framingT = Math.max(0, framingT - dt);
+      cam.setFraming(clamp(framingT / 0.6, 0, 1) * 0.9);
+
+      focusPos = pickFocus(c);
+      cam.update(dt, c.camera, {
+        pos: position, speed: planar, sprintT, crouchT: crouchT,
+        grounded, turnRate, animPhase: anim.state.phase,
+      }, focusPos, groundAt);
     },
 
     getForward() { return new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw)); },
 
     place(x, z, yawDeg = 0) {
-      position.set(x, world?.heightAt?.(x, z) ?? 0, z);
+      const y = groundAt(x, z);
+      position.set(x, y, z);
       velocity.set(0, 0, 0);
       yaw = THREE.MathUtils.degToRad(yawDeg);
-      root.position.copy(position); root.rotation.y = yaw;
-      return { x, z, y: position.y };
+      bodyYaw = yaw;
+      cam.yaw = yaw;
+      grounded = true; wasGrounded = true; sprintT = 0; crouchT = 0;
+      turnRate = 0; accelFwd = 0; anticipT = -1; buffer = 0; coyote = MOVE.coyote;
+      framingT = 0;
+      if (root) { root.position.copy(position); root.rotation.y = bodyYaw; }
+      cam.snap();
+      return { x, z, y };
     },
 
     snapshot() {
       return {
         pos: [+position.x.toFixed(2), +position.y.toFixed(2), +position.z.toFixed(2)],
         yawDeg: +THREE.MathUtils.radToDeg(yaw).toFixed(1),
+        bodyYawDeg: +THREE.MathUtils.radToDeg(bodyYaw).toFixed(1),
         speed: +Math.hypot(velocity.x, velocity.z).toFixed(2),
         state, grounded,
+        sprint: +sprintT.toFixed(2),
+        gesture: +(anim?.gesturePhase ?? 0).toFixed(2),
+        cam: cam.snapshot(),
       };
     },
   };
+
+  /** the creature the camera should lean toward: interaction focus first, else nearest */
+  function pickFocus(c) {
+    const inter = c.get('interaction');
+    if (inter?.focus?.position) return focusVec.copy(inter.focus.position).setY(inter.focus.position.y + 0.45);
+    const creatures = c.get('creatures');
+    if (!creatures?.nearest) return null;
+    const near = creatures.nearest(position, 15);
+    if (!near) return null;
+    return focusVec.copy(near.position).setY(near.position.y + 0.5);
+  }
+
+  function faceNearestCreature() {
+    const creatures = ctx?.get?.('creatures');
+    const near = creatures?.nearest?.(position, 9);
+    if (near) focusPos = focusVec.copy(near.position);
+  }
+
+  return api;
+}
+
+function angleDelta(a, b) {
+  let d = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
 }
 
 function dampAngle(a, b, lambda, dt) {
-  let d = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
-  if (d < -Math.PI) d += Math.PI * 2;
-  return a + d * (1 - Math.exp(-lambda * dt));
+  return a + angleDelta(a, b) * (1 - Math.exp(-lambda * dt));
 }
