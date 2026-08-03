@@ -16,6 +16,14 @@ const DEFAULT_BINDINGS = {
   KeyJ: 'journal',
   Tab: 'journal',
   KeyM: 'mute',
+  // ---- loadout: what is in the traveller's hands -------------------------
+  // Slots are absolute rather than a cycle. A cycle key is fine when you have two
+  // items and miserable when you have four and one of them is a weapon you did not
+  // mean to raise at a creature you were about to befriend.
+  Digit1: 'slot1', Digit2: 'slot2', Digit3: 'slot3', Digit4: 'slot4',
+  KeyG: 'reload',
+  KeyV: 'aim',        // keyboard mirror of right-mouse, so the harness and anyone
+                      // without a mouse can still aim
 };
 
 export class Input {
@@ -62,17 +70,23 @@ export class Input {
       if (this.pointerLocked) { this.look.dx += e.movementX; this.look.dy += e.movementY; }
     });
     window.addEventListener('wheel', (e) => { if (!this.scripted) this.wheel += Math.sign(e.deltaY); }, { passive: true });
+    // Left mouse raises BOTH 'throw' and 'fire'. One physical button, two verbs, so
+    // the sphere system and the weapon system each listen for the thing they actually
+    // mean instead of both racing on one ambiguous 'primary' action and having to ask
+    // each other what is equipped. The loadout decides which of them responds.
+    const MOUSE = { 0: ['throw', 'fire'], 2: ['aim'] };
     window.addEventListener('mousedown', (e) => {
       if (this.scripted || !this.pointerLocked) return;
-      const a = e.button === 0 ? 'throw' : 'aim';
-      if (!this.actions[a]) this.pressed[a] = true;
-      this.actions[a] = true;
+      for (const a of MOUSE[e.button] ?? []) {
+        if (!this.actions[a]) this.pressed[a] = true;
+        this.actions[a] = true;
+      }
     });
     window.addEventListener('mouseup', (e) => {
       if (this.scripted || !this.pointerLocked) return;
-      const a = e.button === 0 ? 'throw' : 'aim';
-      this.actions[a] = false; this.released[a] = true;
+      for (const a of MOUSE[e.button] ?? []) { this.actions[a] = false; this.released[a] = true; }
     });
+    window.addEventListener('contextmenu', (e) => { if (this.pointerLocked) e.preventDefault(); });
   }
 
   down(a) { return !!this.actions[a]; }

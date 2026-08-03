@@ -31,6 +31,26 @@ const SEED = arg('seed', '20240719');
 const outDir = path.resolve('captures', `${round}-playtest`);
 
 /**
+ * Write the current canvas to disk.
+ *
+ * This existed as a bare `shot(page, file)` call with no such function anywhere in the
+ * file, so EVERY playtest run died on the first beat with "shot is not defined" and
+ * reported FAILED — 0 beats. capture.mjs had the identical bug and was fixed; this copy
+ * was missed, which means the playtest instrument has been dead since that rename.
+ * Matches capture.mjs so a change to how frames are grabbed lands on both harnesses.
+ */
+const grabFrame = async (page, file) => {
+  // 30s (playwright's default) is not enough under concurrent agent load: several
+  // builders capturing at once on a swiftshader software rasteriser pushed screenshots
+  // past it and threw away otherwise-good runs. Same 120s + one retry as capture.mjs.
+  try {
+    await page.screenshot({ path: file, animations: 'disabled', timeout: 120000 });
+  } catch {
+    await page.screenshot({ path: file, animations: 'disabled', timeout: 120000 });
+  }
+};
+
+/**
  * A plausible first-five-minutes player. Deliberately naive: it does what someone
  * who has never seen the game would do — look around, walk toward the interesting
  * thing, try the prompted button, wander off.
@@ -171,7 +191,7 @@ async function main() {
       await page.evaluate(`(${beat.act.toString()})(window.__game, ${JSON.stringify(before)})`);
       await page.evaluate(() => window.__game.render());
       const file = path.join(outDir, `frame_${String(i).padStart(2, '0')}.png`);
-      await shot(page, file);
+      await grabFrame(page, file);
       const after = await page.evaluate(() => window.__game.state());
       const events = await page.evaluate(() => window.__game.events(40));
       timeline.beats.push({

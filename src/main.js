@@ -6,6 +6,9 @@ import { createPlayer } from './player/index.js';
 import { createCreatures } from './creatures/index.js';
 import { createAI } from './ai/index.js';
 import { createInteraction } from './interaction/index.js';
+import { createLoadout } from './loadout/index.js';
+import { createSpheres } from './spheres/index.js';
+import { createWeapons } from './weapons/index.js';
 import { createUI } from './ui/index.js';
 import { createAudio } from './audio/index.js';
 import { createPost } from './post/index.js';
@@ -30,6 +33,9 @@ game.register(createPlayer());
 game.register(createCreatures());
 game.register(createAI());
 game.register(createInteraction());
+game.register(createLoadout());
+game.register(createSpheres());
+game.register(createWeapons());
 game.register(createUI());
 game.register(createAudio());
 game.register(createPost());
@@ -39,7 +45,9 @@ const msg = document.getElementById('boot-msg');
 const BOOT_TEXT = {
   world: 'raising the hills…', sky: 'hanging the sun…', player: 'waking the traveller…',
   creatures: 'hatching the pals…', ai: 'teaching them to be curious…',
-  interaction: 'filling your satchel…', ui: 'inking the journal…',
+  interaction: 'filling your satchel…', loadout: 'checking your pockets…',
+  spheres: 'winding the spheres…', weapons: 'oiling the action…',
+  ui: 'inking the journal…',
   audio: 'tuning the wind…', post: 'grading the light…', ready: 'ready',
 };
 

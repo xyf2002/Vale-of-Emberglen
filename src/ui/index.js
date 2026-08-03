@@ -328,7 +328,7 @@ export function createUI() {
   const mrk = { a: 0, target: null, name: '', stage: 0, need: 0, text: '', edge: false };
   // the bond moment, and the roster it leaves behind
   const bond = { a: 0, t: 0, name: '', line: '', eyebrow: '' };
-  const party = [];                       // [{ species, name }]
+  const party = [];                       // [{ id, species, name, given }]
   const frg = { a: 0, text: '', edge: false, on: false };
   let goalT = 0, goalDone = false;   // the one line that says what the game is about
 
@@ -339,6 +339,52 @@ export function createUI() {
 
   function speciesName(id) {
     return creatures?.species?.[id]?.name ?? (id ? id[0].toUpperCase() + id.slice(1) : 'Unknown');
+  }
+
+  /**
+   * THE COMPANION WHO HAD NO IDENTITY.
+   *
+   * `def.name` is the SPECIES name — every Emberfox in the world answers to "Emberfox" —
+   * and the roster used it as its dedupe key. Two consequences, and the second is much
+   * worse than the one that got logged:
+   *
+   *   1. The bond banner could name a different individual than the one under the
+   *      reticle, because both were called the same thing.
+   *   2. Taming a SECOND creature of a species silently did nothing. `party.some(p =>
+   *      p.name === nm)` matched the first one and returned early, so the banner
+   *      celebrated a companion that never appeared in "Travels with you" — the one
+   *      permanent, lasting proof that the bond happened at all. The peak moment of the
+   *      slice, followed by the HUD quietly forgetting it.
+   *
+   * Both come from having no notion of an individual, so that is what gets added.
+   * A bonded creature earns a given name; wild ones keep the species name, because when
+   * you are identifying something in the grass the species IS the information you want.
+   * Getting to call it something only yours to call is the reward for the bond.
+   *
+   * Deterministic by construction: derived from the creature's spawn id, which comes off
+   * the seeded world, so the same seed always produces the same names. No Math.random —
+   * round-over-round A/B depends on it.
+   */
+  const GIVEN_NAMES = [
+    'Pip', 'Ash', 'Juniper', 'Bramble', 'Sorrel', 'Fen', 'Marlow', 'Poppy',
+    'Rowan', 'Clove', 'Wren', 'Tansy', 'Bracken', 'Mable', 'Fig', 'Hazel',
+  ];
+  const givenById = new Map();
+  function givenName(creature) {
+    const key = creature?.id;
+    if (givenById.has(key)) return givenById.get(key);
+    // small integer hash so adjacent spawn ids don't hand out adjacent names
+    let h = ((key ?? 0) * 2654435761) >>> 0;
+    h ^= h >>> 15;
+    for (const ch of String(creature?.species ?? '')) h = ((h * 31 + ch.charCodeAt(0)) >>> 0);
+    let name = GIVEN_NAMES[h % GIVEN_NAMES.length];
+    // never hand the same name to two creatures the player already knows by it
+    const taken = new Set(givenById.values());
+    for (let i = 1; taken.has(name) && i < GIVEN_NAMES.length; i++) {
+      name = GIVEN_NAMES[(h + i) % GIVEN_NAMES.length];
+    }
+    givenById.set(key, name);
+    return name;
   }
 
   function buildJournal() {
@@ -540,24 +586,30 @@ export function createUI() {
         tamed.add(creature.species);
         discover(creature.species);
         if (journalOpen) buildJournal();
-        const nm = creature.def?.name ?? speciesName(creature.species);
-        bond.name = nm;
+        const sp = creature.def?.name ?? speciesName(creature.species);
+        const given = givenName(creature);
+        bond.name = given;
         bond.eyebrow = party.length ? 'Another companion' : 'You have a companion';
-        bond.line = `${nm} will follow you now`;
+        // The species still has to appear somewhere, or a player who just learned the
+        // word "Emberfox" is handed an unrelated one and has to work out what happened.
+        bond.line = `${given} the ${sp} will follow you now`;
         bond.t = 11;   // long enough that a moment this rare is never merely glimpsed
         el.bondSil.innerHTML = silhouetteSVG(creature.species, { size: 52 });
         setText(el.bondEye, bond.eyebrow);
-        setText(el.bondName, nm);
+        setText(el.bondName, given);
         setText(el.bondLine, bond.line);
       });
       c.bus.on('companion:joined', ({ creature }) => {
-        const nm = creature.def?.name ?? speciesName(creature.species);
-        if (party.some((p) => p.name === nm)) return;
-        party.push({ species: creature.species, name: nm });
+        // Dedupe on the INDIVIDUAL, not the species name. Keying on the name meant the
+        // second Emberfox you ever tamed matched the first and returned early here, so
+        // it was celebrated by the banner and then left out of the only permanent record
+        // that it happened.
+        if (party.some((p) => p.id === creature.id)) return;
+        party.push({ id: creature.id, species: creature.species, name: creature.def?.name ?? speciesName(creature.species), given: givenName(creature) });
         el.party.style.display = '';
         el.party.innerHTML = `<span class="lbl">Travels with you</span>`
           + party.slice(0, 3).map((p) => `<span class="who">${silhouetteSVG(p.species, { size: 16 })}`
-            + `<span class="nm">${p.name}</span></span>`).join('');
+            + `<span class="nm">${p.given}</span></span>`).join('');
       });
       c.bus.on('interact:focus', ({ target, kind }) => {
         if (target) discover(target.species);
@@ -701,7 +753,7 @@ export function createUI() {
       if (bond.a > 0.2) visible.push(bond.eyebrow, bond.line);
       if (journalA < 0.5) for (const t2 of toasts) if (t2.el.style.opacity > 0.3) visible.push(t2.read ?? t2.text);
       if (party.length && journalA < 0.5) {
-        visible.push(`Travels with you: ${party.map((p) => p.name).join(', ')}`);
+        visible.push(`Travels with you: ${party.map((p) => `${p.given} the ${p.name}`).join(', ')}`);
       }
       visible.push(`Recorded ${discovered.size} of ${speciesOrder.length}`);
       if (jcueT > 0 && !journalOpen) visible.push('Field journal [J]');
@@ -718,7 +770,7 @@ export function createUI() {
         onboarding: open.beat,
         vigour: +vigour.toFixed(2),
         berries,
-        party: party.map((p) => p.name),
+        party: party.map((p) => ({ id: p.id, species: p.species, given: p.given })),
         bond: bond.a > 0.2 ? { name: bond.name, line: bond.line } : null,
       };
     },
@@ -796,7 +848,11 @@ export function createUI() {
       } else {
         const r = inter?.readout?.(focus) ?? null;
         const stage = focus.tamed ? 4 : (r?.stage ?? 0);
-        ret.name = focus.def?.name ?? speciesName(focus.species);
+        // A wild creature is identified by SPECIES — that is the information you want
+        // when you are working out what is standing in the grass. One that already
+        // travels with you is identified by the name you know it by, so the reticle and
+        // the roster can never disagree about who you are looking at.
+        ret.name = givenById.get(focus.id) ?? focus.def?.name ?? speciesName(focus.species);
         ret.stage = STAGE_WORDS[r?.name ?? 'wild'] ?? (r?.name ?? '');
         ret.need = r?.need ?? 0;
         // The cost, in the slot where the mood word used to live. This is the whole fix.

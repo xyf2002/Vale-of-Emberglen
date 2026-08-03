@@ -18,7 +18,11 @@ import { Input } from './Input.js';
 
 export const ORDER = {
   WORLD: 10, SKY: 20, PLAYER: 30, CREATURES: 40, AI: 50,
-  INTERACTION: 60, UI: 80, AUDIO: 90, POST: 100,
+  INTERACTION: 60,
+  // Loadout runs before the things it gates, so a slot change lands on the same frame
+  // the player pressed it. Spheres and weapons then read an already-settled hand.
+  LOADOUT: 62, SPHERES: 64, WEAPONS: 66,
+  UI: 80, AUDIO: 90, POST: 100,
 };
 
 export class Game {
