@@ -229,7 +229,51 @@ export function createWorld() {
 
       ground = new THREE.Mesh(geo, groundMat);
       ground.receiveShadow = true;
-      ground.castShadow = false;
+      // ------------------------------------------------------------------
+      // THE HILLSIDE THAT COULD NOT SHADE ITSELF.
+      //
+      // The single loudest symptom of the no-shadow frame was "a hillside covered in
+      // trees under a low sun, and the hillside is a smooth unbroken green". Half of
+      // that is that the terrain was not in the shadow map AT ALL: castShadow was
+      // false, so no ridge, no bank, no butte and no crag ever put anything into
+      // shade, at any time of day. A 16 deg morning key should be laying the whole
+      // far side of every rise into darkness; instead every slope was rendering its
+      // own Lambert term and nothing else, which is exactly the "terrain preview with
+      // props dropped on it" read.
+      //
+      // Cost: one extra draw call and ~125k triangles in the depth pass. Acne is
+      // handled by sun.shadow.normalBias (see sky/index.js) -- a big low-poly mesh
+      // taking the key at a grazing angle is the acne worst case and needs a
+      // world-space normal offset on the order of the shadow texel's depth slope.
+      // ------------------------------------------------------------------
+      ground.castShadow = true;
+      // ------------------------------------------------------------------
+      // SLOPE-SCALED DEPTH BIAS, and why the obvious knobs cannot do this job.
+      //
+      // A heightfield lit at 16 degrees is the acne worst case: one shadow texel spans
+      // texel/sin(elev) = 50 cm of ground and the depth changes by 48 cm ACROSS THAT
+      // ONE TEXEL. Comparing a fragment against a sample taken half a texel away
+      // therefore fails by up to a quarter of a metre, and the entire flat meadow
+      // shadows itself. (Measured: with the terrain casting and no offset, 70% of the
+      // over-shoulder frame went fully black.)
+      //
+      // shadow.bias is a CONSTANT in normalised depth, so sizing it for a grazing sun
+      // makes every shadow in the frame peter-pan at noon. shadow.normalBias pushes
+      // along the surface normal, which at a grazing sun is almost perpendicular to
+      // the light and buys nearly no depth at all.
+      //
+      // glPolygonOffset is the tool that is actually shaped like the problem: the
+      // factor term scales with the polygon's depth slope in the shadow camera, so a
+      // slope facing the sun square-on gets essentially nothing and a slope raking
+      // away from it gets exactly as much as it needs. Attaching it via
+      // customDepthMaterial keeps it on the terrain and off everything else.
+      // ------------------------------------------------------------------
+      ground.customDepthMaterial = new THREE.MeshDepthMaterial({
+        depthPacking: THREE.RGBADepthPacking,
+        polygonOffset: true,
+        polygonOffsetFactor: 2.5,
+        polygonOffsetUnits: 4.0,
+      });
       ground.name = 'ground';
       c.scene.add(ground);
 

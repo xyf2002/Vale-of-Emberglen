@@ -15,12 +15,17 @@ export function createCompanion(ctx, { player, world, fx, bus }) {
   const tmp2 = new THREE.Vector3();
   const members = [];
 
+  /**
+   * Companions walk BESIDE you, not behind you. Trailing at 2m looks right on paper and is
+   * wrong in the frame: the third-person camera sits behind the player, so "behind the
+   * player" is "on the lens" — two companions filled a third of the screen with an ear and
+   * a muzzle. Flanking also reads better: they are travelling WITH you, not after you.
+   */
   function slotFor(i, yaw) {
-    // fan out behind the player, alternating sides
     const side = i % 2 === 0 ? 1 : -1;
     const rank = Math.floor(i / 2);
-    const back = 2.1 + rank * 1.25;
-    const lat = side * (1.15 + rank * 0.5);
+    const back = 0.8 + rank * 1.1;
+    const lat = side * (2.45 + rank * 0.6);
     return tmp.set(
       Math.cos(yaw) * lat - Math.sin(yaw) * -back,
       0,
@@ -73,8 +78,9 @@ export function createCompanion(ctx, { player, world, fx, bus }) {
         // ---- the lap of honour, once, at the moment it becomes yours -------
         if (c.greet > 0) {
           c.greet -= dt;
+          // wide enough that the lap of honour reads as a lap and not as a face on the lens
           const ang = pyaw + (4.2 - c.greet) * 3.1;
-          const gx = pp.x + Math.sin(ang) * 2.0, gz = pp.z + Math.cos(ang) * 2.0;
+          const gx = pp.x + Math.sin(ang) * 3.1, gz = pp.z + Math.cos(ang) * 3.1;
           tmp2.set(gx - cr.position.x, 0, gz - cr.position.z);
           const speedG = (cr.stats?.speed ?? 2.4) * 2.1;
           if (tmp2.lengthSq() > 1e-4) cr.intent.move.copy(tmp2.normalize()).multiplyScalar(speedG);

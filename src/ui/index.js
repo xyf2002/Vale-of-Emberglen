@@ -544,7 +544,7 @@ export function createUI() {
         bond.name = nm;
         bond.eyebrow = party.length ? 'Another companion' : 'You have a companion';
         bond.line = `${nm} will follow you now`;
-        bond.t = 9;
+        bond.t = 11;   // long enough that a moment this rare is never merely glimpsed
         el.bondSil.innerHTML = silhouetteSVG(creature.species, { size: 52 });
         setText(el.bondEye, bond.eyebrow);
         setText(el.bondName, nm);
@@ -586,7 +586,7 @@ export function createUI() {
       updateMarker(dt, c);
       updateForage(dt, c);
       updateBond(dt);
-      scanDiscoveries(c);
+      scanDiscoveries(c, dt);
       updateColdOpen(dt, c);
       updateToasts(dt);
       updateCompass(dt, c);
@@ -927,16 +927,23 @@ export function createUI() {
    * recorded two species of four and the journal read "2 of 4" from start to finish.
    * A naturalist records what they can SEE. Thirty metres and in frame is seeing it.
    */
-  function scanDiscoveries(c) {
+  let discoverCd = 0;
+  function scanDiscoveries(c, dt) {
     const list = creatures?.list;
-    if (!list || !player || journalOpen) return;
+    discoverCd = Math.max(0, discoverCd - dt);
+    // one specimen at a time: two plates landing in the same second is a pile, not a moment
+    if (!list || !player || journalOpen || discoverCd > 0) return;
     const w = c.renderer.domElement.clientWidth || window.innerWidth;
     const h = c.renderer.domElement.clientHeight || window.innerHeight;
     for (const cr of list) {
       if (!cr?.position || discovered.has(cr.species)) continue;
       if (cr.position.distanceTo(player.position) > 32) continue;
       const s = project(c, cr.position, (cr.def?.size ?? 1) * 0.6);
-      if (s.z < 1 && s.x > 8 && s.x < w - 8 && s.y > 8 && s.y < h - 8) { discover(cr.species); return; }
+      if (s.z < 1 && s.x > 8 && s.x < w - 8 && s.y > 8 && s.y < h - 8) {
+        discoverCd = 6.5;
+        discover(cr.species);
+        return;
+      }
     }
   }
 

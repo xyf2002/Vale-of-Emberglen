@@ -109,7 +109,7 @@ async function main() {
       await page.evaluate(`(${shot.setup.toString()})(window.__game)`);
       await page.evaluate(() => window.__game.render());
       const file = path.join(outDir, `${shot.id}.png`);
-      await page.screenshot({ path: file, animations: 'disabled' });
+      await shot(page, file);
       const state = await page.evaluate(() => window.__game.state());
       const stats = await page.evaluate(() => window.__game.stats());
       const probe = await page.evaluate(`(${FRAME_PROBE.toString()})()`);
@@ -132,7 +132,7 @@ async function main() {
           if (strip.beforeFrame) await page.evaluate(`(${strip.beforeFrame.toString()})(window.__game, ${i})`);
           await page.evaluate(() => window.__game.render());
           const f = path.join(outDir, `${strip.id}_${String(i).padStart(2, '0')}.png`);
-          await page.screenshot({ path: f, animations: 'disabled' });
+          await shot(page, f);
           frames.push(path.relative(process.cwd(), f));
           descs.push(await page.evaluate(() => window.__game.state().ai?.described ?? null));
           if (i < strip.frames - 1) await page.evaluate(`(${strip.between.toString()})(window.__game)`);

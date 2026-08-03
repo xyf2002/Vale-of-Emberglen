@@ -404,18 +404,42 @@ const WEATHER = {
  * 0.75 — which is why the documented "golden hour" (0.72) was already nearly overhead
  * and "dusk" (0.85) was 38 degrees below the horizon with the world pitch black.
  *
- * Here the daylight arc is widened to t in [0.205, 0.805] and shaped so the sun spends a
- * long time low: 0.29 -> ~15 deg (low morning), 0.45/0.60 -> high day, 0.72 -> ~15 deg,
- * 0.74 -> ~10 deg (golden), 0.80 -> sunset, 0.86 -> ~-7 deg (civil twilight / blue hour),
- * 0.0 -> ~-38 deg (true night). Every documented time-of-day now means what it says.
+ * Here the daylight arc is widened to t in [0.205, 0.805].
+ *
+ * THE ARC WAS TOO TALL AND TOO POINTED. Two numbers set its shape: the noon peak and
+ * the exponent that decides how fast it falls away from noon. At 63 deg / ^1.6 the
+ * documented times landed at 0.29 -> 16, 0.34 -> 33, 0.45 -> 49, 0.60 -> 51, 0.63 -> 44.
+ * Four of the five daylight shots were therefore lit from 33-51 degrees, and a key that
+ * steep is the worst possible angle for readable form: a 12 m tree at 51 deg throws a
+ * 10 m shadow that its own canopy hides, so a hillside covered in trees renders as one
+ * smooth unbroken green. It is also why cast shadow contributed nothing measurable to
+ * the image even after the shadow map itself was fixed -- the shadows existed, they
+ * were just tucked underneath the things casting them.
+ *
+ * 46 deg / ^1.15 keeps the same silhouette but flattens the top and lifts the shoulders:
+ *   0.29 -> 20, 0.34 -> 28, 0.45 -> 44, 0.50 -> 46 (noon), 0.60 -> 40, 0.63 -> 35,
+ *   0.72 -> 17 (golden hour, the 18-25 deg band the reference plates sit in),
+ *   0.80 -> sunset, 0.86 -> ~-7 (civil twilight / blue hour), 0.0 -> -38 (true night).
+ * Noon loses 19% of its illumination on flat ground and low morning GAINS 19%, which
+ * moves the daylight ground/sky ratios toward the middle of the reference band rather
+ * than out of either end of it.
  */
 const RISE_T = 0.205;
 const SET_T = 0.805;
 const DAY_HALF = (SET_T - RISE_T) * 0.5;      // 0.30
 const DAY_MID = (SET_T + RISE_T) * 0.5;       // 0.505
 const NIGHT_HALF = 0.5 - DAY_HALF;            // 0.20
-const MAX_ELEV = 63 * Math.PI / 180;
+const MAX_ELEV = 46 * Math.PI / 180;
 const MIN_ELEV = -38 * Math.PI / 180;
+const DAY_SHAPE = 1.15;
+
+/**
+ * How far back the key light is parked from the shadow focus point. It has to clear
+ * the deepest the ground can get in light space: for an ortho half-size S at sun
+ * elevation e the ground spans +/- S/tan(e) metres of depth, which at S = 150 and the
+ * 16 deg morning key is +/- 520 m. 620 keeps the whole box in front of the near plane.
+ */
+const KEY_DIST = 620;
 
 function sunElevation(t) {
   let u = t - DAY_MID;
@@ -423,21 +447,43 @@ function sunElevation(t) {
   const a = Math.abs(u);
   if (a <= DAY_HALF) {
     const k = Math.cos((Math.PI * 0.5) * (a / DAY_HALF));
-    return MAX_ELEV * Math.pow(Math.max(0, k), 1.6);
+    return MAX_ELEV * Math.pow(Math.max(0, k), DAY_SHAPE);
   }
   const v = Math.min(1, (a - DAY_HALF) / NIGHT_HALF);
   const k = Math.sin((Math.PI * 0.5) * v);
   return MIN_ELEV * (k * k);
 }
 
-/** azimuth sweep: due east at sunrise, due south at noon, due west at sunset */
+/**
+ * Azimuth sweep, rotated so the key is not sitting on the camera's shoulder.
+ *
+ * MEASURED, per shot, as the angle between the camera's forward vector and the
+ * direction to the sun (180 = sun exactly behind the lens, 90 = side light):
+ *
+ *      vista_golden 172.9    creature_group 179.1    interaction_feed 172.7
+ *
+ * Three of the five daylight shots were lit from within eight degrees of dead behind
+ * the camera. That is the single most complete explanation of "nothing casts a shadow
+ * onto anything else": every shadow in those frames falls directly AWAY from the
+ * lens, which puts it exactly behind the thing casting it, where that thing hides it.
+ * It is also why bushes and creatures looked like they were hovering — a contact
+ * shadow thrown straight away from the camera is not a contact shadow you can see.
+ *
+ * The world is composed around one axis (terrain.js) and every wide shot looks along
+ * it, so this was not bad luck, it was structural: the sun's arc and the composition
+ * axis were nearly parallel. Rotating the whole arc by AZ_OFFSET swings the key
+ * across that axis instead of along it, which puts four of the five daylight shots
+ * into 60-120 degree cross light.
+ */
+const AZ_OFFSET = -67 * Math.PI / 180;
+
 function sunAzimuthPhase(t) {
   let u = t - DAY_MID;
   if (u > 0.5) u -= 1; else if (u < -0.5) u += 1;
-  if (Math.abs(u) <= DAY_HALF) return Math.PI * (0.5 + 0.5 * (u / DAY_HALF));
+  if (Math.abs(u) <= DAY_HALF) return Math.PI * (0.5 + 0.5 * (u / DAY_HALF)) + AZ_OFFSET;
   const s = Math.sign(u) || 1;
   const v = (Math.abs(u) - DAY_HALF) / NIGHT_HALF;
-  return s > 0 ? Math.PI * (1 + 0.5 * v) : Math.PI * (-0.5 * v);
+  return (s > 0 ? Math.PI * (1 + 0.5 * v) : Math.PI * (-0.5 * v)) + AZ_OFFSET;
 }
 
 export function createSky() {
@@ -612,6 +658,19 @@ export function createSky() {
     }
     sun.color.copy(sunColor);
 
+    // ------------------------------------------------------------------
+    // SHADOW STRENGTH THROUGH TWILIGHT.
+    //
+    // Below the horizon the "key" is a fiction: keyDir is clamped to 4 deg and stands
+    // in for a sky that is, by then, an almost perfectly diffuse dome. Letting the
+    // terrain cast hard shadow off that fictional 4 deg direction blankets the entire
+    // world in a single flat shadow -- measured on the dusk shot as mean luminance
+    // 50 -> 43 and local contrast 3.2 -> 1.9, i.e. the frame lost most of what little
+    // structure it had. shadow.intensity is exactly the knob for this: full shadow
+    // once the sun is properly up, faded out as it sets.
+    // ------------------------------------------------------------------
+    sun.shadow.intensity = 0.20 + 0.80 * smoothstep(0.02, 0.16, y);
+
     // Hemisphere fill — reference #9 wants real shadow structure, so the ambient
     // must stay well below the key. ~0.6 day keeps open shadows readable (~45/255
     // on meadow grass) while contact/under-tree shadows still fall dark; the 0.33
@@ -673,11 +732,12 @@ export function createSky() {
     // ------------------------------------------------------------------
     // sun position + shadow frustum
     // ------------------------------------------------------------------
-    sun.position.copy(sun.target.position).addScaledVector(keyDir, 250);
+    sun.position.copy(sun.target.position).addScaledVector(keyDir, KEY_DIST);
   }
 
   /** snap the shadow camera to the light-space texel grid — kills shimmer */
   const _r = new THREE.Vector3(), _u = new THREE.Vector3(), _p = new THREE.Vector3();
+  const _fwd = new THREE.Vector3();
   function focusShadow(px, py, pz) {
     const half = sun.shadow.camera.right;
     const texel = (half * 2) / sun.shadow.mapSize.x;
@@ -691,8 +751,27 @@ export function createSky() {
     const db = b - Math.round(b / texel) * texel;
     sun.target.position.copy(_p).addScaledVector(_r, -da).addScaledVector(_u, -db);
     sun.target.updateMatrixWorld();
-    sun.position.copy(sun.target.position).addScaledVector(keyDir, 250);
+    sun.position.copy(sun.target.position).addScaledVector(keyDir, KEY_DIST);
     sun.updateMatrixWorld();
+  }
+
+  /**
+   * Where to centre the shadow box.
+   *
+   * It used to be the player's feet, which spends half the map behind the camera.
+   * A third-person camera looks FORWARD, so pushing the centre ~45% of a half-box
+   * down the view axis roughly doubles the amount of on-screen ground the shadow map
+   * covers, at zero cost. The player stays comfortably inside the box (the offset is
+   * always less than half its half-size), so their own shadow is never lost.
+   */
+  function focusForCamera(cam, px, py, pz) {
+    if (!cam) { focusShadow(px, py, pz); return; }
+    _fwd.set(0, 0, -1).applyQuaternion(cam.quaternion);
+    _fwd.y = 0;
+    if (_fwd.lengthSq() < 1e-8) _fwd.set(0, 0, -1);
+    _fwd.normalize();
+    const ahead = sun.shadow.camera.right * 0.45;
+    focusShadow(cam.position.x + _fwd.x * ahead, py, cam.position.z + _fwd.z * ahead);
   }
 
   function refreshEnv(force = false) {
@@ -730,14 +809,42 @@ export function createSky() {
       sun = new THREE.DirectionalLight(0xffffff, 3);
       sun.castShadow = true;
       const m = c.quality.shadowMapSize;
-      // tight frustum: 2048 over a 150 m box == 7.3 cm/texel, crisp right under the player
-      const s = c.quality.tier === 'high' ? 78 : 72;
+      // ------------------------------------------------------------------
+      // THE SHADOW FRUSTUM WAS TOO SMALL AND TOO CLOSE.
+      //
+      // It used to be a 144 m box with the light parked 250 m away and far = 520.
+      // Two things fell out of that, and together they are why "nothing in any frame
+      // casts a shadow onto anything else":
+      //
+      //   1. An ORTHOGRAPHIC shadow box of half-size S only covers S/sin(elev) metres
+      //      of GROUND along the sun azimuth. At the vista shot's 51 deg key that is
+      //      93 m: the tree-covered hillside the critic pointed at sits at 150-300 m,
+      //      entirely outside the shadow map, so it could not be broken up by shadow
+      //      no matter what else was fixed. Every wide shot was showing terrain that
+      //      the shadow map had never heard of.
+      //   2. far = 520 with the light 250 m out meant the ground could only be +/-270 m
+      //      deep in light space. Widening the box without moving the light back just
+      //      clips the far half of it away.
+      //
+      // So: a much bigger box, the light pushed well back, and a depth range that
+      // actually bounds it. 2048 over 280 m is 13.7 cm/texel -- coarser than the old
+      // 7 cm, which cost nothing visible, because at 7 cm the map was resolving
+      // individual grass tufts inside a frame that had no shadows in it at all.
+      // ------------------------------------------------------------------
+      const s = c.quality.tier === 'high' ? 150 : 140;
       sun.shadow.mapSize.set(m, m);
       sun.shadow.camera.left = -s; sun.shadow.camera.right = s;
       sun.shadow.camera.top = s; sun.shadow.camera.bottom = -s;
-      sun.shadow.camera.near = 1; sun.shadow.camera.far = 520;
-      sun.shadow.bias = -0.00035;
-      sun.shadow.normalBias = 0.07;
+      sun.shadow.camera.near = 10; sun.shadow.camera.far = KEY_DIST * 2 - 10;
+      // shadow.bias is in NORMALISED depth, so it scales with (far - near): the old
+      // -0.00035 over a 519 m range was 0.18 m of depth push. Held at ~0.10 m here.
+      sun.shadow.bias = -0.00009;
+      // normalBias is a CONSTANT world-space push along the surface normal, so the
+      // depth it actually buys is normalBias * sin(elevation) -- 4 cm at the 16 deg
+      // morning key. It can never be the terrain's acne fix (the terrain needs a
+      // SLOPE-SCALED offset; see ground.customDepthMaterial in world/index.js). Kept
+      // here only to stop small props shadowing their own facing side.
+      sun.shadow.normalBias = 0.12;
       sun.shadow.camera.updateProjectionMatrix();
       c.scene.add(sun, sun.target);
 
@@ -819,8 +926,7 @@ export function createSky() {
       apply();
 
       const p = c.get('player')?.position;
-      if (p) focusShadow(p.x, p.y, p.z);
-      else focusShadow(c.camera.position.x, 0, c.camera.position.z);
+      focusForCamera(c.camera, p?.x ?? c.camera.position.x, p?.y ?? 0, p?.z ?? c.camera.position.z);
 
       envTimer += dt;
       if (envTimer > 0.4) { envTimer = 0; refreshEnv(false); }
@@ -832,7 +938,7 @@ export function createSky() {
       applyWeather(0);
       apply();
       const p = ctx?.get('player')?.position;
-      if (p) focusShadow(p.x, p.y, p.z);
+      if (p) focusForCamera(ctx?.camera, p.x, p.y, p.z);
       refreshEnv(true);
     },
     getSunDirection() { return sunDir.clone(); },

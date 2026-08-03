@@ -171,7 +171,7 @@ async function main() {
       await page.evaluate(`(${beat.act.toString()})(window.__game, ${JSON.stringify(before)})`);
       await page.evaluate(() => window.__game.render());
       const file = path.join(outDir, `frame_${String(i).padStart(2, '0')}.png`);
-      await page.screenshot({ path: file });
+      await shot(page, file);
       const after = await page.evaluate(() => window.__game.state());
       const events = await page.evaluate(() => window.__game.events(40));
       timeline.beats.push({
