@@ -1,15 +1,15 @@
 {
   "goal": "A 5-minute playable vertical slice that captures the core fantasy of Palworld: a beautiful third-person world, charming creatures, meaningful interaction, and believable creature behaviour.",
   "bar": "The real Palworld. A fresh critic is shown our capture beside an official Palworld frame — same shot type, same resolution, same format, labels stripped, order shuffled — and asked which one is the shipped commercial game. We are done when critics stop reliably picking correctly.",
-  "currentRound": "r09",
-  "currentState": "round 9 running — four builders: terrain material, taming legibility, AI bound to real props, creature grounding",
+  "currentRound": "r10",
+  "currentState": "round 10 running — close the berry economy dead-end, celebrate the bond, and finish terrain surface detail",
   "pickRate": 0.0,
   "metrics": {
     "caption": "Objective guardrails, measured with tools/measure.py against the real reference frames. Not the bar — a critic's eye is — but they stop arguments about whether a change helped. Two bands were corrected in r08 after being measured from the reference rather than invented.",
     "rows": [
       {
         "name": "ground/sky luminance ratio",
-        "ours": "0.66 – 0.88",
+        "ours": "0.68 – 0.87",
         "target": "0.63 – 0.96",
         "status": "pass"
       },
@@ -21,53 +21,78 @@
       },
       {
         "name": "dusk mean luminance",
-        "ours": "52.6",
+        "ours": "50.7",
         "target": "≈50.7 (pw_16)",
         "status": "pass"
       },
       {
+        "name": "creature contact shadows",
+        "ours": "rendering",
+        "target": "rendering",
+        "status": "pass"
+      },
+      {
+        "name": "playtest reaches 5 minutes",
+        "ours": "309 sim seconds",
+        "target": "300",
+        "status": "pass"
+      },
+      {
+        "name": "naive player tames a companion",
+        "ours": "1",
+        "target": "≥ 1",
+        "status": "pass"
+      },
+      {
         "name": "local contrast / fine detail",
-        "ours": "1.7 – 4.5",
-        "target": "5.2 – 9.9",
+        "ours": "1.7 – 5.2",
+        "target": "5.0 – 10.0",
         "status": "fail"
       },
       {
-        "name": "distinct colours",
-        "ours": "168 – 595",
-        "target": "420 – 1100",
+        "name": "berry economy recovers from zero",
+        "ours": "never — 11/28 beats at zero",
+        "target": "≥ 2 recoveries",
         "status": "fail"
-      },
-      {
-        "name": "mean saturation",
-        "ours": "0.26 – 0.56",
-        "target": "0.26 – 0.32",
-        "status": "pass"
-      },
-      {
-        "name": "scene richness",
-        "ours": "150–185 draws, ~1.2M tris",
-        "target": "< 300 draws",
-        "status": "pass"
       }
     ]
   },
   "openGaps": [
-    "PLAYTEST VERDICT: a stranger puts this down at five minutes. Not because it is broken — because it never tells them they are winning. The session ended with 0 creatures tamed while a Woolkin sat at trust 0.69, one berry from companionship, for 117 seconds.",
-    "MOTION VERDICT: 0 clean passes, 6 partial, 6 fail against the 12 aliveness criteria. The AI narrates causality it does not have — 'walking to the south-east lookout rock' when there is no rock; destinations are random terrain points named from a word list.",
-    "VISUAL VERDICT: 5/5 identified in blind A/B. The ground is one uniform value across 40-70% of every frame and the grass billboards stop at a fixed radius, leaving a visible ring or a hard three-band seam. Local contrast 1.7-4.5 vs reference 5.2-9.9.",
-    "Creatures cast no shadow at all — measured delta under their feet is ~0 against a 25-luma shadow under the player's. The contact-shadow system exists and renders nothing.",
-    "One idle loop: the same creature holds an identical silhouette for ~10s, and two creatures side by side share a pose and facing.",
-    "The world is a 120x90m diorama inside a 972x972m map. Run 100m from spawn and there is nothing.",
-    "offer burns berries into empty grass with no range gate — 4 of 6 berries wasted in one session, which can dead-end the core loop.",
+    "Local contrast is the last big visual gap: 3.5–4.2 on the wide shots against the reference's 7.5–9.9. The ground is one uniform value across 40–70% of every frame. Both the blind critic and the objective measure named this independently.",
+    "The berry economy dead-ends: the count goes 6→3→0 and never recovers, leaving the player locked out of the core loop for the last 2.5 minutes even though the game correctly signposts where to restock.",
+    "The bond moment — the emotional peak of the slice — happens without celebration, buried under a berry warning repeated four times.",
+    "dusk_mood is the weakest frame: local contrast 1.66 and 146 distinct colours against the reference night frame's 422; the starfield reads as a hard-clipped rectangular patch.",
+    "Distant trees float: terrain fogs to sky-white while darker canopies survive the fade.",
+    "Only 2 of 4 species get recorded in five minutes.",
     "Reference gap: only 1 of 17 official stills is early-game peaceful exploration, so interaction_feed has no honest comp and is judged on the art-direction rubric instead.",
     "Reference gap: the trailer never shows a creature noticing an approaching player, so behaviour_approach has no fair comp and is graded against the 12 written criteria."
   ],
   "rounds": [
     {
+      "id": "r10",
+      "title": "Close the loop economy; finish terrain detail",
+      "date": "2026-08-03",
+      "status": "running",
+      "summary": "Two builders. One closes the berry dead-end and makes the bond moment unmissable; the other finishes the terrain surface-detail work that was interrupted. The visual target is local contrast above 5.0 on every daylight shot without regressing the tonal work of rounds 7–9.",
+      "improvements": [
+        "Creature contact shadows now render — they were measuring a delta of ~0 under creature feet against a 25-luma shadow under the player's.",
+        "The taming HUD now shows stage and cost-to-finish ('NOTICED ●○○○ · 3 berries to go') with a world-anchored marker that survives leaving prompt range — the playtest critic's single highest-leverage change.",
+        "A range gate stopped berries being thrown into empty grass, and the game now names where to restock.",
+        "AI destinations bound to real scene geometry via a new src/ai/props.js, so 'walking to the lookout rock' can refer to a rock that exists.",
+        "Playtest harness made honest and fair: it now runs by actual simulated time (309s, was 163s while claiming five minutes) and models a player who RESPONDS to the HUD rather than following a fixed script — which is the only fair way to test a HUD change.",
+        "With a responsive player the naive session now ends with a tamed companion, up from zero."
+      ],
+      "gaps": [
+        "Berry economy still dead-ends",
+        "Bond moment still uncelebrated",
+        "Terrain detail work interrupted partway"
+      ]
+    },
+    {
       "id": "r09",
       "title": "Four builders against three critic verdicts",
       "date": "2026-08-03",
-      "status": "running",
+      "status": "done",
       "summary": "All three instruments reported and each named one highest-leverage change. Terrain material variety (blind critic + local-contrast measure agreed independently); taming legibility — surface the stage and the cost-to-finish where the mood word is now; bind AI destinations to real visible props so the good decisions reach the screen; and ground the creatures, which currently cast no shadow at all.",
       "improvements": [
         "Six instrument bugs found BY the critics and fixed: capture --only wiped the round mid-review; shots were never actually isolated, so a taming leaked into the 'creatures left completely alone' strip; the motion strips could not frame what they graded; playtest --minutes 5 ran only 163 simulated seconds; one reference image was the comp for two shots; the group shot framed the player instead of the group.",

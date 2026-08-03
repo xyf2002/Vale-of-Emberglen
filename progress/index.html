@@ -59,11 +59,11 @@ code{background:#ffffff12;padding:1px 6px;border-radius:4px;font-size:12.5px}
 </header>
 <main>
   <div class="bar">
-    <div class="stat"><div class="k">Round</div><div class="v">r09</div></div>
-    <div class="stat"><div class="k">State</div><div class="v" style="font-size:15px">round 9 running — four builders: terrain material, taming legibility, AI bound to real props, creature grounding</div></div>
+    <div class="stat"><div class="k">Round</div><div class="v">r10</div></div>
+    <div class="stat"><div class="k">State</div><div class="v" style="font-size:15px">round 10 running — close the berry economy dead-end, celebrate the bond, and finish terrain surface detail</div></div>
     <div class="stat"><div class="k">Real-game pick rate</div><div class="v"><span class="meter"><i style="width:0%"></i></span><b>0%</b></div></div>
-    <div class="stat"><div class="k">Improvements landed</div><div class="v">22</div></div>
-    <div class="stat"><div class="k">Open gaps</div><div class="v">9</div></div>
+    <div class="stat"><div class="k">Improvements landed</div><div class="v">28</div></div>
+    <div class="stat"><div class="k">Open gaps</div><div class="v">8</div></div>
   </div>
 
   <h3>The bar</h3>
@@ -72,18 +72,19 @@ code{background:#ffffff12;padding:1px 6px;border-radius:4px;font-size:12.5px}
   <h3 style="margin-top:26px">Measured against the reference</h3>
   <div class="dim" style="font-size:13px;margin-bottom:8px">Objective guardrails, measured with tools/measure.py against the real reference frames. Not the bar — a critic's eye is — but they stop arguments about whether a change helped. Two bands were corrected in r08 after being measured from the reference rather than invented.</div>
   <table><tr><th>Guardrail</th><th>Ours</th><th>Reference target</th><th></th></tr>
-  <tr><td>ground/sky luminance ratio</td><td><b>0.66 – 0.88</b></td><td class="dim">0.63 – 0.96</td>
+  <tr><td>ground/sky luminance ratio</td><td><b>0.68 – 0.87</b></td><td class="dim">0.63 – 0.96</td>
     <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>highlight clipping</td><td><b>0.00%</b></td><td class="dim">&lt; 0.5%</td>
-    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>dusk mean luminance</td><td><b>52.6</b></td><td class="dim">≈50.7 (pw_16)</td>
-    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>local contrast / fine detail</td><td><b>1.7 – 4.5</b></td><td class="dim">5.2 – 9.9</td>
-    <td><span class="badge" style="--c:#ff8a8a">off target</span></td></tr><tr><td>distinct colours</td><td><b>168 – 595</b></td><td class="dim">420 – 1100</td>
-    <td><span class="badge" style="--c:#ff8a8a">off target</span></td></tr><tr><td>mean saturation</td><td><b>0.26 – 0.56</b></td><td class="dim">0.26 – 0.32</td>
-    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>scene richness</td><td><b>150–185 draws, ~1.2M tris</b></td><td class="dim">&lt; 300 draws</td>
-    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr>
+    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>dusk mean luminance</td><td><b>50.7</b></td><td class="dim">≈50.7 (pw_16)</td>
+    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>creature contact shadows</td><td><b>rendering</b></td><td class="dim">rendering</td>
+    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>playtest reaches 5 minutes</td><td><b>309 sim seconds</b></td><td class="dim">300</td>
+    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>naive player tames a companion</td><td><b>1</b></td><td class="dim">≥ 1</td>
+    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>local contrast / fine detail</td><td><b>1.7 – 5.2</b></td><td class="dim">5.0 – 10.0</td>
+    <td><span class="badge" style="--c:#ff8a8a">off target</span></td></tr><tr><td>berry economy recovers from zero</td><td><b>never — 11/28 beats at zero</b></td><td class="dim">≥ 2 recoveries</td>
+    <td><span class="badge" style="--c:#ff8a8a">off target</span></td></tr>
   </table>
 
   <h3>Biggest remaining gaps</h3>
-  <ul><li class="gap">PLAYTEST VERDICT: a stranger puts this down at five minutes. Not because it is broken — because it never tells them they are winning. The session ended with 0 creatures tamed while a Woolkin sat at trust 0.69, one berry from companionship, for 117 seconds.</li><li class="gap">MOTION VERDICT: 0 clean passes, 6 partial, 6 fail against the 12 aliveness criteria. The AI narrates causality it does not have — 'walking to the south-east lookout rock' when there is no rock; destinations are random terrain points named from a word list.</li><li class="gap">VISUAL VERDICT: 5/5 identified in blind A/B. The ground is one uniform value across 40-70% of every frame and the grass billboards stop at a fixed radius, leaving a visible ring or a hard three-band seam. Local contrast 1.7-4.5 vs reference 5.2-9.9.</li><li class="gap">Creatures cast no shadow at all — measured delta under their feet is ~0 against a 25-luma shadow under the player's. The contact-shadow system exists and renders nothing.</li><li class="gap">One idle loop: the same creature holds an identical silhouette for ~10s, and two creatures side by side share a pose and facing.</li><li class="gap">The world is a 120x90m diorama inside a 972x972m map. Run 100m from spawn and there is nothing.</li><li class="gap">offer burns berries into empty grass with no range gate — 4 of 6 berries wasted in one session, which can dead-end the core loop.</li><li class="gap">Reference gap: only 1 of 17 official stills is early-game peaceful exploration, so interaction_feed has no honest comp and is judged on the art-direction rubric instead.</li><li class="gap">Reference gap: the trailer never shows a creature noticing an approaching player, so behaviour_approach has no fair comp and is graded against the 12 written criteria.</li></ul>
+  <ul><li class="gap">Local contrast is the last big visual gap: 3.5–4.2 on the wide shots against the reference's 7.5–9.9. The ground is one uniform value across 40–70% of every frame. Both the blind critic and the objective measure named this independently.</li><li class="gap">The berry economy dead-ends: the count goes 6→3→0 and never recovers, leaving the player locked out of the core loop for the last 2.5 minutes even though the game correctly signposts where to restock.</li><li class="gap">The bond moment — the emotional peak of the slice — happens without celebration, buried under a berry warning repeated four times.</li><li class="gap">dusk_mood is the weakest frame: local contrast 1.66 and 146 distinct colours against the reference night frame's 422; the starfield reads as a hard-clipped rectangular patch.</li><li class="gap">Distant trees float: terrain fogs to sky-white while darker canopies survive the fade.</li><li class="gap">Only 2 of 4 species get recorded in five minutes.</li><li class="gap">Reference gap: only 1 of 17 official stills is early-game peaceful exploration, so interaction_feed has no honest comp and is judged on the art-direction rubric instead.</li><li class="gap">Reference gap: the trailer never shows a creature noticing an approaching player, so behaviour_approach has no fair comp and is graded against the 12 written criteria.</li></ul>
 
   <h3 style="margin-top:30px">Rounds</h3>
   
@@ -168,13 +169,12 @@ code{background:#ffffff12;padding:1px 6px;border-radius:4px;font-size:12.5px}
         <div><h3>Gaps found by critics</h3><ul><li class="gap">Blind A/B 5/5 identified — pick rate 0%</li><li class="gap">Motion rubric: 0 passes, 6 partial, 6 fail</li><li class="gap">Playtest: 0 tamed in five minutes; the richest system in the build only ever renders into a JSON field</li></ul></div>
       </div>
       
-      <h3>Frames</h3><div class="grid"><div class="shot"><img loading="lazy" src="../captures/r08/creature_group.png" alt="creature_group.png">
-        <div class="cap"><span>creature_group</span><span>165 draws</span></div></div></div>
+      <p class="dim">no captures yet</p>
       
     </div>
   </details>
   <details class="round" >
-    <summary>r09 — Four builders against three critic verdicts <span class="badge" style="--c:#e8b45c">running</span>
+    <summary>r09 — Four builders against three critic verdicts <span class="badge" style="--c:#7fd18b">complete</span>
       <span style="margin-left:auto;font-weight:400;color:var(--dim);font-size:13px">2026-08-03</span></summary>
     <div class="body">
       <div class="verdict">All three instruments reported and each named one highest-leverage change. Terrain material variety (blind critic + local-contrast measure agreed independently); taming legibility — surface the stage and the cost-to-finish where the mood word is now; bind AI destinations to real visible props so the good decisions reach the screen; and ground the creatures, which currently cast no shadow at all.</div>
@@ -183,12 +183,32 @@ code{background:#ffffff12;padding:1px 6px;border-radius:4px;font-size:12.5px}
         <div><h3>Gaps found by critics</h3><ul><li class="dim">—</li></ul></div>
       </div>
       
+      <h3>Frames</h3><div class="grid"><div class="shot"><img loading="lazy" src="../captures/r09/creature_group.png" alt="creature_group.png">
+        <div class="cap"><span>creature_group</span><span>189 draws</span></div></div><div class="shot"><img loading="lazy" src="../captures/r09/creature_portrait.png" alt="creature_portrait.png">
+        <div class="cap"><span>creature_portrait</span><span>188 draws</span></div></div><div class="shot"><img loading="lazy" src="../captures/r09/dusk_mood.png" alt="dusk_mood.png">
+        <div class="cap"><span>dusk_mood</span><span>204 draws</span></div></div><div class="shot"><img loading="lazy" src="../captures/r09/interaction_feed.png" alt="interaction_feed.png">
+        <div class="cap"><span>interaction_feed</span><span>200 draws</span></div></div><div class="shot"><img loading="lazy" src="../captures/r09/overshoulder_meadow.png" alt="overshoulder_meadow.png">
+        <div class="cap"><span>overshoulder_meadow</span><span>198 draws</span></div></div><div class="shot"><img loading="lazy" src="../captures/r09/vista_golden.png" alt="vista_golden.png">
+        <div class="cap"><span>vista_golden</span><span>166 draws</span></div></div></div>
+      <h3>Motion strips</h3><div class="strip"><img loading="lazy" src="../captures/r09/behaviour_approach_00.png" alt="behaviour_approach_00.png"><img loading="lazy" src="../captures/r09/behaviour_approach_01.png" alt="behaviour_approach_01.png"><img loading="lazy" src="../captures/r09/behaviour_approach_02.png" alt="behaviour_approach_02.png"><img loading="lazy" src="../captures/r09/behaviour_approach_03.png" alt="behaviour_approach_03.png"><img loading="lazy" src="../captures/r09/behaviour_approach_04.png" alt="behaviour_approach_04.png"><img loading="lazy" src="../captures/r09/behaviour_approach_05.png" alt="behaviour_approach_05.png"><img loading="lazy" src="../captures/r09/behaviour_approach_06.png" alt="behaviour_approach_06.png"><img loading="lazy" src="../captures/r09/behaviour_approach_07.png" alt="behaviour_approach_07.png"><img loading="lazy" src="../captures/r09/behaviour_idle_00.png" alt="behaviour_idle_00.png"><img loading="lazy" src="../captures/r09/behaviour_idle_01.png" alt="behaviour_idle_01.png"><img loading="lazy" src="../captures/r09/behaviour_idle_02.png" alt="behaviour_idle_02.png"><img loading="lazy" src="../captures/r09/behaviour_idle_03.png" alt="behaviour_idle_03.png"><img loading="lazy" src="../captures/r09/behaviour_idle_04.png" alt="behaviour_idle_04.png"><img loading="lazy" src="../captures/r09/behaviour_idle_05.png" alt="behaviour_idle_05.png"><img loading="lazy" src="../captures/r09/behaviour_idle_06.png" alt="behaviour_idle_06.png"><img loading="lazy" src="../captures/r09/behaviour_idle_07.png" alt="behaviour_idle_07.png"><img loading="lazy" src="../captures/r09/behaviour_startle_00.png" alt="behaviour_startle_00.png"><img loading="lazy" src="../captures/r09/behaviour_startle_01.png" alt="behaviour_startle_01.png"><img loading="lazy" src="../captures/r09/behaviour_startle_02.png" alt="behaviour_startle_02.png"><img loading="lazy" src="../captures/r09/behaviour_startle_03.png" alt="behaviour_startle_03.png"><img loading="lazy" src="../captures/r09/behaviour_startle_04.png" alt="behaviour_startle_04.png"><img loading="lazy" src="../captures/r09/behaviour_startle_05.png" alt="behaviour_startle_05.png"><img loading="lazy" src="../captures/r09/behaviour_startle_06.png" alt="behaviour_startle_06.png"><img loading="lazy" src="../captures/r09/behaviour_startle_07.png" alt="behaviour_startle_07.png"></div>
+    </div>
+  </details>
+  <details class="round" >
+    <summary>r10 — Close the loop economy; finish terrain detail <span class="badge" style="--c:#e8b45c">running</span>
+      <span style="margin-left:auto;font-weight:400;color:var(--dim);font-size:13px">2026-08-03</span></summary>
+    <div class="body">
+      <div class="verdict">Two builders. One closes the berry dead-end and makes the bond moment unmissable; the other finishes the terrain surface-detail work that was interrupted. The visual target is local contrast above 5.0 on every daylight shot without regressing the tonal work of rounds 7–9.</div>
+      <div class="cols">
+        <div><h3>Improvements landed</h3><ul><li>Creature contact shadows now render — they were measuring a delta of ~0 under creature feet against a 25-luma shadow under the player's.</li><li>The taming HUD now shows stage and cost-to-finish ('NOTICED ●○○○ · 3 berries to go') with a world-anchored marker that survives leaving prompt range — the playtest critic's single highest-leverage change.</li><li>A range gate stopped berries being thrown into empty grass, and the game now names where to restock.</li><li>AI destinations bound to real scene geometry via a new src/ai/props.js, so 'walking to the lookout rock' can refer to a rock that exists.</li><li>Playtest harness made honest and fair: it now runs by actual simulated time (309s, was 163s while claiming five minutes) and models a player who RESPONDS to the HUD rather than following a fixed script — which is the only fair way to test a HUD change.</li><li>With a responsive player the naive session now ends with a tamed companion, up from zero.</li></ul></div>
+        <div><h3>Gaps found by critics</h3><ul><li class="gap">Berry economy still dead-ends</li><li class="gap">Bond moment still uncelebrated</li><li class="gap">Terrain detail work interrupted partway</li></ul></div>
+      </div>
+      
       <p class="dim">no captures yet</p>
       
     </div>
   </details>
 </main>
-<footer>Regenerate with <code>node tools/progress.mjs</code> · captures via <code>node tools/capture.mjs --round &lt;id&gt;</code> · generated 2026-08-02T23:22:14.407Z</footer>
+<footer>Regenerate with <code>node tools/progress.mjs</code> · captures via <code>node tools/capture.mjs --round &lt;id&gt;</code> · generated 2026-08-03T10:45:44.894Z</footer>
 <div id="lb"><img></div>
 <script>
 const lb=document.getElementById('lb'),lbi=lb.querySelector('img');

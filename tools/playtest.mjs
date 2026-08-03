@@ -55,6 +55,47 @@ const BEATS = [
   { t: 158, label: 'Settles in and watches the world for a while.', act: (g) => { g.run(20); } },
 ];
 
+/**
+ * A REACTIVE player: steer toward the nearest creature and press the offered key
+ * whenever the game actually offers it, re-evaluating every 0.4s.
+ *
+ * The fixed beat script could not do this, which made it an unfair test of the HUD:
+ * we had just added a "2 berries to go" prompt and a persistent world marker, and then
+ * graded the game with a player incapable of responding to either. A human who is told
+ * what it costs to finish walks back and finishes. This models that, and nothing more —
+ * it presses only keys the game itself is advertising.
+ */
+function pursueAndInteract(g, seconds) {
+  const steps = Math.max(1, Math.round(seconds / 0.4));
+  for (let i = 0; i < steps; i++) {
+    const s = g.state();
+    const p = s.player.pos;
+    const list = (s.creatures && s.creatures.sample) || [];
+    let best = null, bd = 1e9;
+    for (const c of list) {
+      const d = Math.hypot(c.pos[0] - p[0], c.pos[1] - p[2]);
+      if (d < bd) { bd = d; best = c; }
+    }
+    if (best) {
+      const want = Math.atan2(-(best.pos[0] - p[0]), -(best.pos[1] - p[2]));
+      const cur = (s.player.yawDeg * Math.PI) / 180;
+      let dd = ((want - cur + Math.PI) % (Math.PI * 2)) - Math.PI;
+      if (dd < -Math.PI) dd += Math.PI * 2;
+      g.look((-dd / 0.0026) * 0.5, 0);
+      // close the distance, but stop pushing once we are at conversational range
+      g.hold('forward', bd > 3.2);
+    }
+    // press whatever the game is currently offering
+    if (s.interaction && s.interaction.prompt) g.tap('offer');
+    // and try to gather — a player who is told "a bush is 20m north-east, press E at it"
+    // goes and presses E. Without this the harness can never restock and every session
+    // dead-ends at zero berries, which looks like a game bug but is a harness blind spot.
+    g.tap('interact');
+    g.run(0.4);
+  }
+  g.hold('forward', false);
+}
+
 /** turn the player toward the nearest creature using only the public capture API */
 function steerToNearestCreature(g, _s) {
   const st = g.state();
@@ -102,27 +143,30 @@ async function main() {
     // Beat bodies are stringified and evaluated inside the page, so any helper they
     // call must exist in the page too — it is not in scope just because it is in this file.
     await page.evaluate(`window.__steer = ${steerToNearestCreature.toString()}`);
+    await page.evaluate(`window.__pursue = ${pursueAndInteract.toString()}`);
 
     // `--minutes 5` used to advance only ~163 simulated seconds, because the scripted
     // beats simply ran out and the flag merely gated which of them fired. The final
     // 2.5 minutes of the vertical slice were never exercised, while the harness
     // reported a five-minute playtest. Extend with generated beats to the real budget.
     const budget = MINUTES * 60;
-    const scriptedEnd = BEATS.length ? BEATS[BEATS.length - 1].t + 20 : 0;
     const EXTRA = [
-      { label: 'Keeps exploring outward.', act: (g) => { g.hold('forward', true); g.hold('sprint', true); g.run(14); g.hold('sprint', false); } },
-      { label: 'Stops; looks for anything to do.', act: (g) => { g.hold('forward', false); g.look(700, 0); g.run(6); } },
-      { label: 'Tries to interact with whatever is nearest.', act: (g, s) => { window.__steer(g, s); g.run(6); g.tap('offer'); g.run(2); } },
-      { label: 'Doubles back.', act: (g) => { g.look(1600, 0); g.hold('forward', true); g.run(10); g.hold('forward', false); } },
+      { label: 'Goes back to the creature it was befriending, and finishes.', act: (g) => { window.__pursue(g, 18); } },
+      { label: 'Keeps exploring outward.', act: (g) => { g.hold('forward', true); g.hold('sprint', true); g.run(14); g.hold('sprint', false); g.hold('forward', false); } },
+      { label: 'Finds another creature and works on it.', act: (g) => { window.__pursue(g, 20); } },
       { label: 'Stands and watches the world.', act: (g) => { g.run(12); } },
+      { label: 'Doubles back.', act: (g) => { g.look(1600, 0); g.hold('forward', true); g.run(10); g.hold('forward', false); } },
     ];
-    for (let t = scriptedEnd, k = 0; t < budget; t += 20, k++) {
-      BEATS.push({ t, label: `[extended] ${EXTRA[k % EXTRA.length].label}`, act: EXTRA[k % EXTRA.length].act });
-    }
 
-    let i = 0;
-    for (const beat of BEATS) {
-      if (beat.t > budget) break;
+    // Drive by ACTUAL simulated time, not by each beat's nominal `t` label. Those labels
+    // were only ever hints, so the run stopped when the script ran out rather than when
+    // the five minutes were up — reporting a 5-minute playtest after 163 seconds.
+    let i = 0, k = 0, simElapsed = 0;
+    while (simElapsed < budget && i < 120) {
+      const beat = BEATS[i] ?? {
+        label: `[extended] ${EXTRA[k % EXTRA.length].label}`,
+        act: EXTRA[(k++) % EXTRA.length].act,
+      };
       const before = await page.evaluate(() => window.__game.state());
       await page.evaluate(`(${beat.act.toString()})(window.__game, ${JSON.stringify(before)})`);
       await page.evaluate(() => window.__game.render());
@@ -139,6 +183,7 @@ async function main() {
         newEvents: events.filter((e) => !['resize'].includes(e.evt)).slice(-10).map((e) => e.evt),
       });
       console.log(`  ${String(after.elapsed.toFixed(0)).padStart(4)}s  ${beat.label}`);
+      simElapsed = after.elapsed;
       i++;
     }
   } catch (err) {
