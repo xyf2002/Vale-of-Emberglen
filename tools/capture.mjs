@@ -91,7 +91,18 @@ async function main() {
   if (!only) await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
 
-  const server = await createServer({ server: { port: 0, host: '127.0.0.1', strictPort: false }, logLevel: 'error' });
+  // hmr:false, watch:null — the harness must photograph the build it STARTED with.
+  // With hot reload live, another agent saving a file mid-round reloads the page under
+  // the capture, and the frame that lands on disk is the boot overlay or a black
+  // half-initialised canvas. That is the exact failure FRAME_PROBE exists to catch, and
+  // it was firing constantly ("Execution context was destroyed" on roughly half of all
+  // runs) because the harness was subscribing to file changes it had no use for.
+  // Nothing about determinism or the probe is relaxed here — the opposite: this is what
+  // makes a captured round correspond to a single, known state of the tree.
+  const server = await createServer({
+    server: { port: 0, host: '127.0.0.1', strictPort: false, hmr: false, watch: null },
+    logLevel: 'error',
+  });
   await server.listen();
   const port = server.config.server.port ?? server.httpServer.address().port;
   const base = `http://127.0.0.1:${port}`;

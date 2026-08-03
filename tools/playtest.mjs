@@ -139,7 +139,12 @@ async function main() {
   await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
 
-  const server = await createServer({ server: { port: 0, host: '127.0.0.1', strictPort: false }, logLevel: 'error' });
+  // hmr:false, watch:null — see the note in capture.mjs. A five-minute playtest is the
+  // run most likely to have someone else save a file underneath it.
+  const server = await createServer({
+    server: { port: 0, host: '127.0.0.1', strictPort: false, hmr: false, watch: null },
+    logLevel: 'error',
+  });
   await server.listen();
   const port = server.config.server.port ?? server.httpServer.address().port;
 
