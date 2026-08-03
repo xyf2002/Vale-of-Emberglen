@@ -122,11 +122,24 @@ const GOLDEN = {
 
 const DUSK = {
   key: 'dusk',
-  exposure: 1.85,
+  exposure: 2.44,
   whiteBalance: [1.04, 0.985, 1.045],
-  contrast: 0.92, pivot: 0.16,
+  // A contrast of 0.92 on a night frame is a flattener: dusk measured 1.7 local
+  // contrast and 146 distinct colours against pw_16's 5.2 and 422, at the SAME mean
+  // luminance of 50. The reference night frame is not brighter than ours, it is
+  // better separated.
+  //
+  // NOTE ON THE PIVOT: it is applied to the ACES OUTPUT, which is scene-linear, not
+  // to the display-encoded image. A dusk frame that reads as 50/255 sits at ~0.03
+  // there, so the old 0.16 pivot was five times the frame's own mean -- contrast
+  // below 1 around a pivot that high acts as a big brightness LIFT, which is what
+  // was actually holding dusk at mean 50. Raising contrast without moving the pivot
+  // therefore dropped the whole frame to mean 31 (measured). 0.02 sits just under
+  // the frame's mean, and the lost lift is put back through `offset`, which is
+  // applied after the pivot and is the correct place for it.
+  contrast: 1.20, pivot: 0.02,
   slope: [1.0, 1.0, 1.0],
-  offset: [0.010, 0.013, 0.026],
+  offset: [0.017, 0.020, 0.033],
   power: [1.01, 1.0, 0.975],
   shadowTint: [0.895, 0.95, 1.18],
   highTint: [1.09, 0.985, 0.93],

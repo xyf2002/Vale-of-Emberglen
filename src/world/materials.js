@@ -260,6 +260,9 @@ export function makeAerialMaterial(opts = {}) {
       uAmb: { value: new THREE.Color(0x9fb6cc) },
       uNear: { value: 140 },
       uFar: { value: 900 },
+      // Density of the scene's FogExp2, mirrored here so distant geometry hazes on
+      // EXACTLY the curve the near terrain and the foliage do. See uDensity use below.
+      uDensity: { value: 0.0021 },
       uMax: { value: opts.maxHaze ?? 0.92 },
       uBase: { value: new THREE.Color(opts.color ?? 0xffffff).convertSRGBToLinear() },
       uDesat: { value: opts.desat ?? 0.55 },
@@ -270,6 +273,12 @@ export function makeAerialMaterial(opts = {}) {
       // mountains stay pale and desaturated (reference #7) while still having a lit
       // shoulder and a shaded one.
       uForm: { value: opts.form ?? 0.42 },
+      // Mean vertex luminance of the geometry this material is used on. The form
+      // restore below re-expands contrast AROUND this value, so it must be the
+      // actual mean or the correction becomes a brightness offset and shifts the
+      // horizon's exposure (which the ground/sky ratio guardrail measures). Set it
+      // with setAerialPivot() once the geometry exists.
+      uPivot: { value: opts.pivot ?? 0.62 },
     },
     vertexShader: /* glsl */`
       varying vec3 vN; varying vec3 vW; varying vec3 vC;
@@ -281,7 +290,7 @@ export function makeAerialMaterial(opts = {}) {
       }`,
     fragmentShader: /* glsl */`
       uniform vec3 uFogS, uSun, uSunCol, uAmb, uBase;
-      uniform float uNear, uFar, uMax, uDesat, uForm;
+      uniform float uNear, uFar, uMax, uDesat, uForm, uPivot, uDensity;
       varying vec3 vN; varying vec3 vW; varying vec3 vC;
       void main() {
         vec3 n = normalize(vN);
@@ -293,8 +302,22 @@ export function makeAerialMaterial(opts = {}) {
         float form = ndl * 0.58 + sky * 0.42;
         float vLum = dot(vC, vec3(0.2126, 0.7152, 0.0722));
         float d = length(vW - cameraPosition);
-        // same curve three's linear fog uses, so the seam with the terrain is invisible
-        float f = smoothstep(uNear, uFar, d);
+        // ------------------------------------------------------------------
+        // THE FLOATING-VEGETATION SEAM.
+        //
+        // The scene fog is FogExp2, and the ground mesh, the trees and the bushes all
+        // fade on 1 - exp(-(d*density)^2). This material used smoothstep(140, 900, d)
+        // instead, which is a completely different curve: at the seam where the ground
+        // mesh ends (460 m) the NEAR terrain sat at 0.61 haze while the FAR terrain
+        // 30 m behind it sat at 0.40. Terrain got *less* misty as it receded, so the
+        // mid-ground hills washed out while the ranges behind them stayed solid, and
+        // the canopies sitting on the hazier ground read as darker objects hanging in
+        // white air with nothing under them.
+        //
+        // Same curve, same density, one cap. The cap is what keeps the 1-3 km landmark
+        // from dissolving completely (reference #7 wants it pale, not gone).
+        // ------------------------------------------------------------------
+        float f = clamp(1.0 - exp(-(d * uDensity) * (d * uDensity)), 0.0, 1.0);
         // crush saturation with distance — hue shifts toward the sky, per ref #7
         float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
         c = mix(c, vec3(lum), uDesat * f);
@@ -302,20 +325,36 @@ export function makeAerialMaterial(opts = {}) {
         // old order mixed the sRGB fog colour into the linear composer buffer,
         // which washed far geometry toward white in every capture. The grade now
         // applies ACES+sRGB to the finished mix exactly once, like the terrain.
-        float f2 = smoothstep(uFar, uFar * 3.4, d);
-        float haze = min(1.0, f * uMax + f2 * (1.0 - uMax) * 0.8);
+        float haze = min(f, uMax);
         c = mix(c, uFogS, haze);
         // Put the shading break back. Without this the far ranges are a single flat
         // value: a paper cutout. Scaled by the haze term so it only acts where the mix
         // has already eaten the real shading, and centred on 1.0 so it changes contrast,
         // not exposure — the horizon's mean luminance is unchanged.
-        c *= 1.0 + uForm * haze * ((form - 0.55) * 1.15 + (vLum - 0.62) * 0.9);
+        c *= 1.0 + uForm * haze * ((form - 0.55) * 1.15 + (vLum / max(uPivot, 1e-4) - 1.0) * 1.30);
         gl_FragColor = vec4(max(c, vec3(0.0)), 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }`,
   });
   mat.vertexColors = true;
+  return mat;
+}
+
+/**
+ * Point an aerial material's contrast pivot at the geometry it actually draws.
+ * Without this the "put the shading break back" term (see uForm) is centred on a
+ * guess, and a guess that is wrong by 30% lifts or drops the whole horizon band —
+ * which moves the measured ground/sky luminance ratio for reasons that have
+ * nothing to do with the ground.
+ */
+export function setAerialPivot(mat, geo) {
+  const a = geo?.attributes?.color?.array;
+  if (!a || !mat?.uniforms?.uPivot) return mat;
+  let s = 0;
+  const n = a.length / 3;
+  for (let i = 0; i < n; i++) s += 0.2126 * a[i * 3] + 0.7152 * a[i * 3 + 1] + 0.0722 * a[i * 3 + 2];
+  mat.uniforms.uPivot.value = Math.max(1e-4, s / n);
   return mat;
 }
 
@@ -332,6 +371,10 @@ export function syncAerial(mats, scene, sky) {
       m.uniforms.uAmb.value.copy(fogCol).lerp(_tmpC.setRGB(1, 1, 1), 0.18);
     }
     if (scene.fog) {
+      // FogExp2 has no near/far; carrying its density across is what keeps the far
+      // geometry on the same haze curve as everything three fogs itself.
+      if (scene.fog.isFogExp2) m.uniforms.uDensity.value = scene.fog.density;
+      else if (scene.fog.far) m.uniforms.uDensity.value = 1.6 / scene.fog.far;
       m.uniforms.uNear.value = scene.fog.near ?? 140;
       m.uniforms.uFar.value = scene.fog.far ?? 900;
     }

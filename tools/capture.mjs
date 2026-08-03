@@ -68,7 +68,7 @@ async function main() {
   if (!only) await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
 
-  const server = await createServer({ server: { port: 0, host: '127.0.0.1' }, logLevel: 'error' });
+  const server = await createServer({ server: { port: 0, host: '127.0.0.1', strictPort: false }, logLevel: 'error' });
   await server.listen();
   const port = server.config.server.port ?? server.httpServer.address().port;
   const base = `http://127.0.0.1:${port}`;

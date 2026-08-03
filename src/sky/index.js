@@ -193,20 +193,48 @@ vec3 scatter(vec3 dir, vec3 sunDir) {
 vec3 nightSky(vec3 dir) {
   float h = clamp(dir.y, 0.0, 1.0);
   vec3 base = mix(uNightHorizon, uNightZenith, pow(h, 0.55));
-  // stars
+  // ------------------------------------------------------------------------
+  // THE RECTANGULAR STAR PATCH.
+  //
+  // A critic called this "a hard-clipped rectangular patch that exposes the sky as a
+  // plane with a texture on it", and the shape of the bug is visible in the numbers:
+  // the field faded in over dir.y 0.10 -- a band SIX DEGREES tall -- so on a
+  // near-level dusk camera the stars went from absent to full density across about
+  // forty pixels, and the mountains cut the bottom off that band into a straight
+  // edge. Every star was also the same angular size, which reads as a printed
+  // texture rather than as depth.
+  //
+  // The ramp now spans 40 degrees (dir.y 0.02 -> 0.62), so density genuinely
+  // increases with altitude the way a real sky does and there is no edge to find.
+  // Magnitude drives SIZE as well as brightness, and a second sparser layer of
+  // bright stars sits on top, so the field has a population rather than a density.
+  // ------------------------------------------------------------------------
   if (uStarAmt > 0.001 && dir.y > -0.02) {
-    vec3 sp = dir * 260.0;
-    vec3 cell = floor(sp);
-    float r = hash31(cell);
-    if (r > 0.972) {
-      vec3 c = (cell + 0.5 + (vec3(hash31(cell + 3.1), hash31(cell + 7.7), hash31(cell + 12.3)) - 0.5) * 0.7) / 260.0;
-      float d = length(normalize(c) - dir);
-      float mag = hash31(cell + 21.0);
-      float tw = 0.75 + 0.25 * sin(uTime * (1.4 + mag * 3.0) + mag * 40.0);
-      float s = smoothstep(0.0042, 0.0, d) * (0.25 + mag * mag * 1.7) * tw;
-      vec3 tint = mix(vec3(0.75, 0.83, 1.0), vec3(1.0, 0.93, 0.82), hash31(cell + 5.5));
-      base += tint * s * uStarAmt * smoothstep(-0.02, 0.10, dir.y);
+    float alt = smoothstep(0.02, 0.62, dir.y);
+    for (int L = 0; L < 2; L++) {
+      float scale = L == 0 ? 260.0 : 128.0;
+      float cut = L == 0 ? 0.9705 : 0.9942;
+      vec3 sp = dir * scale;
+      vec3 cell = floor(sp);
+      float r = hash31(cell + float(L) * 17.0);
+      if (r > cut) {
+        vec3 c = (cell + 0.5 + (vec3(hash31(cell + 3.1), hash31(cell + 7.7), hash31(cell + 12.3)) - 0.5) * 0.7) / scale;
+        float d = length(normalize(c) - dir);
+        float mag = hash31(cell + 21.0);
+        // bright stars are physically bigger on screen; a uniform radius is the
+        // single loudest tell that a starfield is a noise function
+        float rad = (L == 0 ? 0.0019 : 0.0034) * (0.55 + mag * 1.5);
+        float tw = 0.72 + 0.28 * sin(uTime * (1.4 + mag * 3.0) + mag * 40.0);
+        float s = smoothstep(rad, 0.0, d) * (0.20 + mag * mag * (L == 0 ? 1.7 : 3.4)) * tw;
+        vec3 tint = mix(vec3(0.72, 0.82, 1.0), vec3(1.0, 0.91, 0.78), hash31(cell + 5.5));
+        base += tint * s * uStarAmt * (L == 0 ? alt : mix(0.35, 1.0, alt));
+      }
     }
+    // a faint band of unresolved stars, so the sky between the points is not empty
+    float bandT = abs(dot(dir, normalize(vec3(0.42, 0.62, -0.66))));
+    float band = pow(1.0 - clamp(bandT, 0.0, 1.0), 7.0);
+    band *= 0.55 + 0.45 * fbm3(dir.xz * 5.5 + dir.y * 3.0);
+    base += vec3(0.028, 0.030, 0.042) * band * uStarAmt * alt;
   }
   // moon
   float md = dot(dir, uMoonDir);
@@ -434,6 +462,10 @@ export function createSky() {
   const horizonColor = new THREE.Color(0.7, 0.8, 0.9);
   const ambientColor = new THREE.Color(0.3, 0.4, 0.55);
   const sunColor = new THREE.Color(1, 1, 1);
+  // 0 in full day -> 1 after the sun is properly down. Published so world props that
+  // only exist after dark (night motes) key off the same curve the sky itself uses,
+  // rather than re-deriving "is it night" from the clock and drifting out of sync.
+  let nightAmount = 0;
 
   // smoothed weather blend
   const wx = { ...WEATHER.clear };
@@ -472,6 +504,7 @@ export function createSky() {
     // --- how much analytic scattering survives, and how much night shows through ---
     const scatterScale = smoothstep(-0.235, 0.030, y);
     const nightAmt = smoothstep(0.075, -0.085, y);
+    nightAmount = nightAmt;
     const starAmt = smoothstep(0.010, -0.075, y);
     const moonAmt = smoothstep(0.020, -0.060, y) * 0.9;
 
@@ -503,8 +536,8 @@ export function createSky() {
     const horizC = scatterJS(sunSky.z * 0.985, 0.045, -sunSky.x * 0.985, sunSky.x, sunSky.y, sunSky.z, P, [0, 0, 0]);
     const zen = scatterJS(0, 1, 0, sunSky.x, sunSky.y, sunSky.z, P, [0, 0, 0]);
 
-    const nz = [0.0055, 0.0140, 0.0400];
-    const nh = [0.0130, 0.0270, 0.0620];
+    const nz = [0.0050, 0.0128, 0.0390];
+    const nh = [0.0215, 0.0395, 0.0850];
 
     const hRaw = [0, 0, 0];
     for (let i = 0; i < 3; i++) {
@@ -728,8 +761,8 @@ export function createSky() {
           uNightAmt: { value: 0 },
           uSkyGain: { value: 1 },
           uHorizonWash: { value: 0.92 },
-          uNightZenith: { value: new THREE.Color(0.0055, 0.014, 0.04) },
-          uNightHorizon: { value: new THREE.Color(0.013, 0.027, 0.062) },
+          uNightZenith: { value: new THREE.Color(0.0050, 0.0128, 0.039) },
+          uNightHorizon: { value: new THREE.Color(0.0215, 0.0395, 0.085) },
           uStarAmt: { value: 0 },
           uMoonAmt: { value: 0 },
           uTime: { value: 0 },
@@ -819,6 +852,7 @@ export function createSky() {
     getHorizonColor() { return horizonColor.clone(); },
     getFogColor() { return fogColor.clone(); },
     getAmbientColor() { return ambientColor.clone(); },
+    getNightAmount() { return nightAmount; },
     setDaySpeed(s) { state.daySpeed = s; },
     setPaused(v) { state.paused = !!v; },
 

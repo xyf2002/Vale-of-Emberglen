@@ -83,6 +83,14 @@ const CSS = `
   border:calc(1.4*var(--s)) solid rgba(246,234,210,.7);box-shadow:0 0 calc(7*var(--s)) rgba(10,7,3,.85)}
 #eg-ui .kit .pip.on{background:var(--ember);border-color:rgba(255,214,150,.95);
   box-shadow:0 0 calc(9*var(--s)) rgba(231,155,66,.75),0 0 calc(4*var(--s)) rgba(10,7,3,.8)}
+/* the roster: who travels with you. permanent, one line, the only lasting proof of a bond */
+#eg-ui .kit .party{display:flex;align-items:center;gap:calc(10*var(--s));margin-top:calc(1*var(--s))}
+#eg-ui .kit .party .who{display:flex;align-items:center;gap:calc(6*var(--s))}
+#eg-ui .kit .party svg{width:calc(17*var(--s));height:calc(17*var(--s));
+  filter:drop-shadow(0 calc(1*var(--s)) calc(2*var(--s)) rgba(10,7,3,.9))}
+#eg-ui .kit .party .nm{font-size:calc(15*var(--s));letter-spacing:.01em}
+#eg-ui .kit .party .lbl{font-family:var(--micro);font-size:calc(9*var(--s));font-weight:600;
+  letter-spacing:.2em;text-transform:uppercase;opacity:.62}
 #eg-ui .vig{position:relative;width:calc(148*var(--s));height:calc(5*var(--s))}
 #eg-ui .vig i{position:absolute;left:0;top:0;height:100%;display:block;border-radius:calc(3*var(--s))}
 #eg-ui .vig .bed{width:100%;background:rgba(10,7,3,.55);
@@ -194,6 +202,32 @@ const CSS = `
 #eg-ui .whisper{position:absolute;left:50%;bottom:calc(86*var(--s));transform:translateX(-50%);
   font-size:calc(15*var(--s));font-style:italic;letter-spacing:.02em;opacity:.85}
 
+/* ---- the bond: the one moment the HUD is allowed to take the middle of the frame ----
+   It lasts nine seconds, once per creature, and it is the only time a name is printed
+   at title size. Everything else in this file is deliberately quiet so that this is not. */
+#eg-ui .bond{position:absolute;left:50%;bottom:calc(132*var(--s));transform:translateX(-50%);
+  display:flex;align-items:center;gap:calc(18*var(--s));white-space:nowrap;
+  padding:calc(20*var(--s)) calc(40*var(--s));margin:calc(-20*var(--s)) calc(-40*var(--s));
+  background:radial-gradient(ellipse 68% 60% at 50% 50%,rgba(10,7,3,.7),rgba(10,7,3,0) 76%)}
+#eg-ui .bond svg{width:calc(56*var(--s));height:calc(56*var(--s));
+  filter:drop-shadow(0 calc(2*var(--s)) calc(4*var(--s)) rgba(10,7,3,.95))}
+#eg-ui .bond .rule{width:calc(1.5*var(--s));height:calc(62*var(--s));background:linear-gradient(
+  180deg,rgba(231,155,66,0),rgba(231,155,66,.95),rgba(231,155,66,0))}
+#eg-ui .bond .eyebrow{font-family:var(--micro);font-size:calc(10*var(--s));font-weight:700;
+  letter-spacing:.3em;text-transform:uppercase;color:#f5b566;text-shadow:var(--lift)}
+#eg-ui .bond .nm{font-size:calc(36*var(--s));line-height:1.08;margin-top:calc(4*var(--s));
+  text-shadow:0 calc(2*var(--s)) calc(7*var(--s)) rgba(8,5,2,.98)}
+#eg-ui .bond .ln{font-size:calc(16.5*var(--s));font-style:italic;opacity:.92;
+  margin-top:calc(5*var(--s));text-shadow:var(--lift)}
+
+/* ---- restock marker: only ever on screen when the satchel is actually empty ---- */
+#eg-ui .forage{position:absolute;left:0;top:0;display:flex;align-items:center;gap:calc(7*var(--s));
+  white-space:nowrap;padding:calc(8*var(--s)) calc(13*var(--s));margin:calc(-8*var(--s)) calc(-13*var(--s));
+  background:radial-gradient(ellipse 72% 60% at 50% 50%,rgba(10,7,3,.5),rgba(10,7,3,0) 78%)}
+#eg-ui .forage svg{width:calc(17*var(--s));height:calc(17*var(--s))}
+#eg-ui .forage .lbl{font-family:var(--micro);font-size:calc(9.5*var(--s));font-weight:700;
+  letter-spacing:.2em;text-transform:uppercase;text-shadow:var(--lift)}
+
 /* ---- the journal: the only filled surface in the game ---- */
 #eg-ui .scrim{position:absolute;inset:0;background:radial-gradient(120% 90% at 50% 50%,
   rgba(14,10,6,.36),rgba(14,10,6,.72));backdrop-filter:blur(calc(2*var(--s)))}
@@ -292,6 +326,10 @@ export function createUI() {
     stage: '', cost: '', need: 0, onScreen: false };
   // the dimmed marker on a creature you started taming and walked away from
   const mrk = { a: 0, target: null, name: '', stage: 0, need: 0, text: '', edge: false };
+  // the bond moment, and the roster it leaves behind
+  const bond = { a: 0, t: 0, name: '', line: '', eyebrow: '' };
+  const party = [];                       // [{ species, name }]
+  const frg = { a: 0, text: '', edge: false, on: false };
   let goalT = 0, goalDone = false;   // the one line that says what the game is about
 
   const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -396,6 +434,12 @@ export function createUI() {
         <div class="mark" style="opacity:0"><span class="tal"
           ><i></i><i></i><i></i><i></i></span><span class="lbl"></span></div>
 
+        <div class="forage" style="opacity:0">${berryGlyph(16)}<span class="lbl"></span></div>
+
+        <div class="bond" style="opacity:0"><span class="sil"></span><span class="rule"></span>
+          <span class="body"><span class="eyebrow"></span>
+            <div class="nm"></div><div class="ln"></div></span></div>
+
         <div class="chev" style="opacity:0"><svg width="30" height="30" viewBox="-15 -15 30 30">
           <g filter="url(#eg-rough)"><path d="M-7,-5 L0,3 L7,-5" fill="none" stroke="rgba(12,8,4,.7)" stroke-width="5"
             stroke-linecap="round" stroke-linejoin="round"/>
@@ -411,6 +455,7 @@ export function createUI() {
         <div class="kit sh">
           <div class="tally"><span class="micro">Recorded</span><span class="pips"></span></div>
           <div class="vig"><i class="bed"></i><i class="fill"></i></div>
+          <div class="party" style="display:none"></div>
         </div>
 
         <div class="toasts sh"></div>
@@ -438,6 +483,14 @@ export function createUI() {
       el.mark = host.querySelector('.mark');
       el.markTally = [...host.querySelectorAll('.mark .tal i')];
       el.markLbl = host.querySelector('.mark .lbl');
+      el.forage = host.querySelector('.forage');
+      el.forageLbl = host.querySelector('.forage .lbl');
+      el.bond = host.querySelector('.bond');
+      el.bondSil = host.querySelector('.bond .sil');
+      el.bondEye = host.querySelector('.bond .eyebrow');
+      el.bondName = host.querySelector('.bond .nm');
+      el.bondLine = host.querySelector('.bond .ln');
+      el.party = host.querySelector('.kit .party');
       el.chev = host.querySelector('.chev');
       el.teach = host.querySelector('.teach');
       el.whisper = host.querySelector('.whisper');
@@ -472,11 +525,39 @@ export function createUI() {
         discover(creature.species);
         api.notify(`${creature.def.name} takes the berry.`, { ttl: 3.2 });
       });
+      /**
+       * THE PAYOFF. A creature became a companion — the emotional peak of the whole slice —
+       * and in a measured session it was represented by one 5.5-second toast that a repeated
+       * berry warning shoved off the stack. Nothing on screen said "follow", "companion" or
+       * the creature's name at the moment it happened.
+       *
+       * So it gets three things instead: a nine-second banner in the middle of the frame
+       * with the name at title size, a permanent line in the field kit naming who travels
+       * with you, and the journal entry flipping to "Travels with you". The audio layer
+       * already answers `creature:tamed` with a chord; this is what you see while it plays.
+       */
       c.bus.on('creature:tamed', ({ creature }) => {
         tamed.add(creature.species);
+        discover(creature.species);
         if (journalOpen) buildJournal();
-        api.notify(`${creature.def.name} stays close now.`, { kind: 'discovery', species: creature.species,
-          eyebrow: 'Companion', ttl: 5.5 });
+        const nm = creature.def?.name ?? speciesName(creature.species);
+        bond.name = nm;
+        bond.eyebrow = party.length ? 'Another companion' : 'You have a companion';
+        bond.line = `${nm} will follow you now`;
+        bond.t = 9;
+        el.bondSil.innerHTML = silhouetteSVG(creature.species, { size: 52 });
+        setText(el.bondEye, bond.eyebrow);
+        setText(el.bondName, nm);
+        setText(el.bondLine, bond.line);
+      });
+      c.bus.on('companion:joined', ({ creature }) => {
+        const nm = creature.def?.name ?? speciesName(creature.species);
+        if (party.some((p) => p.name === nm)) return;
+        party.push({ species: creature.species, name: nm });
+        el.party.style.display = '';
+        el.party.innerHTML = `<span class="lbl">Travels with you</span>`
+          + party.slice(0, 3).map((p) => `<span class="who">${silhouetteSVG(p.species, { size: 16 })}`
+            + `<span class="nm">${p.name}</span></span>`).join('');
       });
       c.bus.on('interact:focus', ({ target, kind }) => {
         if (target) discover(target.species);
@@ -503,6 +584,9 @@ export function createUI() {
       updateVitals(dt, c);
       updateReticle(dt, c);
       updateMarker(dt, c);
+      updateForage(dt, c);
+      updateBond(dt);
+      scanDiscoveries(c);
       updateColdOpen(dt, c);
       updateToasts(dt);
       updateCompass(dt, c);
@@ -549,10 +633,17 @@ export function createUI() {
 
     /**
      * kind: 'note' (default, one serif line) | 'discovery' (eyebrow + name + ink cutout)
+     *
+     * Two rules learned from a measured session that printed the same warning four times
+     * in one beat: a line already on screen is REFRESHED, never stacked, and when the
+     * stack overflows the thing thrown away is the most ordinary note in it — never the
+     * discovery or the bond, which are the two things worth reading.
      */
     notify(text, opts = {}) {
       if (!el.toasts) return null;
       const { ttl = 3.5, kind = 'note', species = null, eyebrow = 'New species recorded' } = opts;
+      const live = toasts.find((x) => x.text === text && x.t > 0.05);
+      if (live) { live.t = Math.max(live.t, ttl); return live; }
       const node = document.createElement('div');
       node.className = 'toast';
       node.dataset.kind = kind;
@@ -562,9 +653,19 @@ export function createUI() {
         : `<div class="body"><div class="t">${text}</div></div>`;
       node.style.opacity = '0';
       el.toasts.appendChild(node);
-      const rec = { el: node, t: ttl, ttl, age: 0, text, kind };
+      const rec = {
+        el: node, t: ttl, ttl, age: 0, text, kind, pin: kind === 'discovery',
+        // What a discovery toast READS as is the eyebrow above the name, not the bare name.
+        // Reporting just the name made it collide with the reticle headline and look like
+        // the same line printed twice.
+        read: kind === 'discovery' ? `${eyebrow}: ${text}` : text,
+      };
       toasts.push(rec);
-      while (toasts.length > 4) { const old = toasts.shift(); old.el.remove(); }
+      while (toasts.length > 3) {
+        let i = toasts.findIndex((x) => !x.pin);
+        if (i < 0 || i === toasts.length - 1) i = 0;
+        toasts.splice(i, 1)[0].el.remove();
+      }
       return rec;
     },
 
@@ -596,7 +697,12 @@ export function createUI() {
       if (mrk.a > 0.12 && mrk.target) {
         visible.push(`${'●'.repeat(mrk.stage)}${'○'.repeat(Math.max(0, 4 - mrk.stage))} ${mrk.text}`);
       }
-      if (journalA < 0.5) for (const t2 of toasts) if (t2.el.style.opacity > 0.3) visible.push(t2.text);
+      if (frg.a > 0.15 && frg.on) visible.push(frg.text);
+      if (bond.a > 0.2) visible.push(bond.eyebrow, bond.line);
+      if (journalA < 0.5) for (const t2 of toasts) if (t2.el.style.opacity > 0.3) visible.push(t2.read ?? t2.text);
+      if (party.length && journalA < 0.5) {
+        visible.push(`Travels with you: ${party.map((p) => p.name).join(', ')}`);
+      }
       visible.push(`Recorded ${discovered.size} of ${speciesOrder.length}`);
       if (jcueT > 0 && !journalOpen) visible.push('Field journal [J]');
       if (journalA > 0.5) visible.push(...journalText());
@@ -612,6 +718,8 @@ export function createUI() {
         onboarding: open.beat,
         vigour: +vigour.toFixed(2),
         berries,
+        party: party.map((p) => p.name),
+        bond: bond.a > 0.2 ? { name: bond.name, line: bond.line } : null,
       };
     },
   };
@@ -766,6 +874,70 @@ export function createUI() {
     const wantA = show ? (mrk.edge ? 0.34 : 0.5) * (1 - ret.a * 0.45) : 0;
     mrk.a = approach(mrk.a, wantA, 6, dt);
     el.mark.style.opacity = mrk.a.toFixed(3);
+  }
+
+  // --------------------------------------------------------------- restock tag
+  /**
+   * Berries are the taming currency. The prompt already says how far a bush is and in
+   * which compass direction, but a bearing in words is a puzzle and an arrow is not — so
+   * when, and only when, the satchel is actually empty, the nearest ripe bush wears a
+   * quiet tag, edge-clamped if it is behind you. It disappears the instant you have one
+   * berry, which is what keeps it from being HUD clutter.
+   */
+  function updateForage(dt, c) {
+    const inter = c.get('interaction');
+    const f = berries <= 0 && !journalOpen ? inter?.forage ?? null : null;
+    frg.on = !!f;
+    if (f) {
+      const s = project(c, f.position, 1.35);
+      const w = c.renderer.domElement.clientWidth || window.innerWidth;
+      const h = c.renderer.domElement.clientHeight || window.innerHeight;
+      const behind = s.z > 1;
+      let x = behind ? (s.x > w / 2 ? 0 : w) : s.x;
+      let y = behind ? h * 0.5 : s.y;
+      frg.edge = behind || x < 110 || x > w - 110 || y < 44 || y > h - 130;
+      x = Math.max(110, Math.min(w - 110, x));
+      y = Math.max(44, Math.min(h - 130, y));
+      frg.text = `Berries · ${Math.round(f.dist)}m`;
+      setText(el.forageLbl, frg.text);
+      el.forage.style.transform =
+        `translate3d(${x.toFixed(1)}px,${y.toFixed(1)}px,0) translate(-50%,-50%)`;
+    }
+    frg.a = approach(frg.a, f ? (frg.edge ? 0.45 : 0.62) : 0, 5, dt);
+    el.forage.style.opacity = frg.a.toFixed(3);
+  }
+
+  // ---------------------------------------------------------------- bond moment
+  function updateBond(dt) {
+    bond.t = Math.max(0, bond.t - dt);
+    const want = bond.t > 0 && !journalOpen ? 1 : 0;
+    bond.a = approach(bond.a, want, want ? 8 : 3.2, dt);
+    if (bond.a < 0.004) { el.bond.style.opacity = '0'; return; }
+    // a slow breath, so the card feels alive for the seconds it owns the frame
+    const pulse = 1 + Math.sin(t * 2.1) * 0.007;
+    el.bond.style.opacity = bond.a.toFixed(3);
+    el.bond.style.transform = `translateX(-50%) translateY(${((1 - bond.a) * 16).toFixed(1)}px)`
+      + ` scale(${((0.962 + 0.038 * bond.a) * pulse).toFixed(4)})`;
+  }
+
+  // ------------------------------------------------------------- journal pacing
+  /**
+   * A specimen used to be recorded only once the interaction layer made it the focus,
+   * which needs it inside 12.5m AND already aware of you — so five minutes of play
+   * recorded two species of four and the journal read "2 of 4" from start to finish.
+   * A naturalist records what they can SEE. Thirty metres and in frame is seeing it.
+   */
+  function scanDiscoveries(c) {
+    const list = creatures?.list;
+    if (!list || !player || journalOpen) return;
+    const w = c.renderer.domElement.clientWidth || window.innerWidth;
+    const h = c.renderer.domElement.clientHeight || window.innerHeight;
+    for (const cr of list) {
+      if (!cr?.position || discovered.has(cr.species)) continue;
+      if (cr.position.distanceTo(player.position) > 32) continue;
+      const s = project(c, cr.position, (cr.def?.size ?? 1) * 0.6);
+      if (s.z < 1 && s.x > 8 && s.x < w - 8 && s.y > 8 && s.y < h - 8) { discover(cr.species); return; }
+    }
   }
 
   // ------------------------------------------------------------------ compass

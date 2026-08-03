@@ -8,11 +8,20 @@ import * as THREE from 'three';
  * Everything is one InstancedMesh per part, so the whole layer is ~6 draw calls.
  */
 
+/**
+ * REACH is measured from the CLUSTER CENTRE, and a berry thicket is two to four bushes
+ * spread over ~2.7m. A 2.6m reach therefore meant standing inside the shrubbery before
+ * the game admitted a bush was there — and a measured five-minute session harvested
+ * exactly nothing, from thirty-seven ready nodes, while the HUD told the player to press
+ * E at a bush. Reach is now "arm's length from the outside of the thicket".
+ *
+ * Berries are the taming currency, so they are also the most plentiful thing in the vale
+ * and the fastest to come back. Running out must cost you a walk, never the session.
+ */
 const KINDS = {
-  // berries are the taming currency, so they regrow fastest — the loop must never stall
-  berry: { label: 'berries', item: 'berry', yieldMin: 3, yieldMax: 4, channel: 0.42, regrow: 40, color: 0xd93a5c, reach: 2.6 },
-  wood: { label: 'sticks', item: 'wood', yieldMin: 2, yieldMax: 3, channel: 0.5, regrow: 70, color: 0x8a6438, reach: 2.4 },
-  stone: { label: 'stone', item: 'stone', yieldMin: 1, yieldMax: 2, channel: 0.62, regrow: 90, color: 0x9aa39a, reach: 2.4 },
+  berry: { label: 'berries', item: 'berry', yieldMin: 4, yieldMax: 6, channel: 0.42, regrow: 22, color: 0xd93a5c, reach: 4.4 },
+  wood: { label: 'sticks', item: 'wood', yieldMin: 2, yieldMax: 3, channel: 0.5, regrow: 70, color: 0x8a6438, reach: 3.0 },
+  stone: { label: 'stone', item: 'stone', yieldMin: 1, yieldMax: 2, channel: 0.62, regrow: 90, color: 0x9aa39a, reach: 2.9 },
 };
 
 /**
@@ -147,7 +156,7 @@ export function createResources(ctx, world, fx) {
   const noise = ctx.noise;
   const nodes = [];
 
-  const MAX_BUSH = 96, MAX_BERRY = 620, MAX_ROCK = 90, MAX_BRANCH = 120;
+  const MAX_BUSH = 180, MAX_BERRY = 1250, MAX_ROCK = 90, MAX_BRANCH = 120;
 
   const bushMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.94, metalness: 0, flatShading: false });
   const berryMat = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: false, roughness: 0.42, metalness: 0 });
@@ -155,7 +164,9 @@ export function createResources(ctx, world, fx) {
   const branchMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0 });
 
   const bushes = new THREE.InstancedMesh(bushGeometry(noise, 3.7), bushMat, MAX_BUSH);
-  const berries = new THREE.InstancedMesh(new THREE.SphereGeometry(0.08, 8, 6), berryMat, MAX_BERRY);
+  // there are twice as many berries in the vale as there used to be, so each one is
+  // cheaper: at 8cm across nobody has ever counted the segments on one
+  const berries = new THREE.InstancedMesh(new THREE.SphereGeometry(0.08, 6, 4), berryMat, MAX_BERRY);
   const rocks = new THREE.InstancedMesh(rockGeometry(noise, 11.3), rockMat, MAX_ROCK);
   const branches = new THREE.InstancedMesh(branchGeometry(), branchMat, MAX_BRANCH);
 
@@ -168,6 +179,9 @@ export function createResources(ctx, world, fx) {
     ctx.scene.add(m);
   }
   berries.castShadow = false;
+  // an 8cm sphere hanging inside a bush is already in that bush's shadow; sampling the
+  // shadow map for each of a thousand of them buys nothing and costs fill
+  berries.receiveShadow = false;
   branches.castShadow = false;
   berries.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_BERRY * 3), 3);
   berries.instanceColor.setUsage(THREE.DynamicDrawUsage);
@@ -180,6 +194,7 @@ export function createResources(ctx, world, fx) {
   const berryCol = new THREE.Color();
 
   let bushN = 0, berryN = 0, rockN = 0, branchN = 0;
+  let harvested = 0;   // instrument: how many nodes the player has actually stripped
 
   function setInst(mesh, i, x, y, z, rx, ry, rz, sx, sy, sz) {
     E.set(rx, ry, rz); Q.setFromEuler(E);
@@ -264,13 +279,17 @@ export function createResources(ctx, world, fx) {
 
   function scatter(kind, count, near, radius) {
     let made = 0;
-    for (let t = 0; t < count * 8 && made < count; t++) {
+    // Berry thickets are allowed to sit closer together than anything else — a hedgerow of
+    // two pockets six metres apart still reads as one pocket of berries, and the currency
+    // needs to be somewhere the player can stumble into rather than navigate to.
+    const sep = kind === 'berry' ? 6 : 8;
+    for (let t = 0; t < count * 14 && made < count; t++) {
       const spot = world?.sampleSpawn?.(rng, { maxSlope: 0.26, near, radius });
       if (!spot) continue;
       // keep clusters apart so they read as pockets, not noise
       let tooClose = false;
       for (const n of nodes) {
-        if (n.position.distanceToSquared({ x: spot.x, y: n.position.y, z: spot.z }) < 64) { tooClose = true; break; }
+        if (n.position.distanceToSquared({ x: spot.x, y: n.position.y, z: spot.z }) < sep * sep) { tooClose = true; break; }
       }
       if (tooClose) continue;
       if (placeCluster(kind, spot.x, spot.z)) made++;
@@ -282,14 +301,23 @@ export function createResources(ctx, world, fx) {
     nodes,
     kinds: KINDS,
 
-    /** seed the world; call after the player exists so the first pockets are findable */
-    populate(playerPos) {
+    /**
+     * Seed the world; call after the player AND the creatures exist.
+     *
+     * `grazing` is the list of places animals actually are. Berries go there. That is not
+     * a convenience — it is the ecology the whole loop rests on: the creatures are near the
+     * berries because they eat them, so the thing you need is always within sight of the
+     * thing you want, and "I have run out" is a twenty-second detour rather than the end
+     * of the session.
+     */
+    populate(playerPos, grazing = []) {
       if (playerPos) {
-        scatter('berry', 4, playerPos, 46);
+        scatter('berry', 7, playerPos, 44);
         scatter('wood', 3, playerPos, 52);
         scatter('stone', 2, playerPos, 58);
       }
-      scatter('berry', 12);
+      for (const p of grazing) scatter('berry', 1, p, 12);
+      scatter('berry', 13);
       scatter('wood', 9);
       scatter('stone', 7);
       bushes.count = bushN; berries.count = berryN; rocks.count = rockN; branches.count = branchN;
@@ -299,14 +327,26 @@ export function createResources(ctx, world, fx) {
     },
 
     /** nearest harvestable node within reach of a position */
-    nearest(pos, extra = 0) {
+    nearest(pos, extra = 0, onlyReady = false) {
       let best = null, bd = Infinity;
       for (const n of nodes) {
+        if (onlyReady && !n.ready) continue;
         const reach = n.def.reach + extra;
         const d = n.position.distanceToSquared(pos);
         if (d < reach * reach && d < bd) { bd = d; best = n; }
       }
       return best;
+    },
+
+    /** nearest node of a kind that currently has something on it, at any distance */
+    nearestReadyOf(kind, pos) {
+      let best = null, bd = Infinity;
+      for (const n of nodes) {
+        if (n.kind !== kind || !n.ready) continue;
+        const d = n.position.distanceToSquared(pos);
+        if (d < bd) { bd = d; best = n; }
+      }
+      return best ? { node: best, dist: Math.sqrt(bd) } : null;
     },
 
     beginGather(node) {
@@ -353,6 +393,8 @@ export function createResources(ctx, world, fx) {
         nodes: nodes.length,
         ready: nodes.filter((n) => n.ready).length,
         byKind: nodes.reduce((a, n) => (a[n.kind] = (a[n.kind] || 0) + 1, a), {}),
+        readyBerry: nodes.filter((n) => n.kind === 'berry' && n.ready).length,
+        harvested,
       };
     },
   };
@@ -372,6 +414,7 @@ export function createResources(ctx, world, fx) {
 
   function harvest(n) {
     const amount = rng.int(n.def.yieldMin, n.def.yieldMax);
+    harvested++;
     n.ready = false;
     n.cool = n.def.regrow;
     n.shake = 1;

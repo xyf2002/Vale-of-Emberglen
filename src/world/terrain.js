@@ -373,13 +373,25 @@ export function buildSkirtGeometry(ctx, T, r0, r1, rings, segs) {
       // striation and no shading break. Three terms fix that while staying inside the
       // low-saturation band: horizontal bedrock banding, a broken snow line, and a
       // large-scale value drift that puts light and dark shoulders on the same ridge.
+      // `noise.fbm` returns a value centred on 0 with a standard deviation of
+      // 0.20 (measured), not a 0..1 field. The previous coefficients (0.17 strat,
+      // 0.13 drift) therefore delivered a 4% value swing across an entire mountain
+      // range, which is precisely the "flat paper cutout, single-facet white
+      // silhouette, no rock striation, no shading break" the critique named.
+      // Amplitudes below are chosen against that measured sd: ~28% total spread,
+      // which is what a hazed range at 1-3 km actually shows.
       const strat = noise.fbm(h * 0.026 + x * 0.0009, h * 0.026 + z * 0.0009, 3);
+      const bands = noise.fbm(h * 0.085 + 17.0, (x + z) * 0.0016, 2);   // tight bedrock courses
       const drift = noise.fbm(x * 0.0021 + 3.3, z * 0.0021 - 7.1, 3);
       const green = smoothstep(210, 90, h);
       const snowLine = 300 + 120 * drift + 60 * strat;
       const snow = smoothstep(snowLine, snowLine + 130, h);
-      c.copy(PAL.rock).lerp(PAL.shade, green * 0.8).lerp(C(0xe8eef2), snow * 0.88);
-      const v = 1 + 0.17 * strat + 0.13 * drift - 0.05 * green;
+      // Rock is not one grey: warm scree on the sunward drift, cool stone in the
+      // troughs. Hue variation survives the aerial desaturation better than value
+      // does, so it is what keeps the far plane from quantising to two colours.
+      c.copy(PAL.rock).lerp(PAL.rockWarm, clamp(0.5 + drift * 1.6, 0, 1) * 0.55);
+      c.lerp(PAL.shade, green * 0.8).lerp(C(0xe8eef2), snow * 0.88);
+      const v = 1 + 0.70 * strat + 0.42 * drift + 0.30 * bands * (1 - snow) - 0.05 * green;
       cols.push(c.r * v, c.g * v, c.b * v);
     }
   }

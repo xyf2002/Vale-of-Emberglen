@@ -19,7 +19,15 @@ import * as THREE from 'three';
  * Everything is deterministic: rng comes from ctx.rng.fork().
  */
 
-const C = (hex) => new THREE.Color(hex).convertSRGBToLinear();
+// NOT .convertSRGBToLinear(). With three's colour management on (the default since r152)
+// `new THREE.Color(hex)` ALREADY decodes the sRGB literal to linear, so converting again
+// squares the transfer curve: 0x4f7331 lands at (0.007, 0.026, 0.002) instead of
+// (0.078, 0.171, 0.030) — measured. That is why these props rendered as near-black
+// lozenges and were the darkest thing in two of our comparison shots, in violation of
+// the reference rule that shadows and foliage are never black.
+// This is the second time this exact double-decode has appeared in the project; the
+// first was linear values written into an sRGB-tagged canvas in world/materials.js.
+const C = (hex) => new THREE.Color(hex);
 const TAU = Math.PI * 2;
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 

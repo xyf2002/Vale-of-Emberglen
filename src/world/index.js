@@ -2,9 +2,9 @@ import * as THREE from 'three';
 import { ORDER } from '../engine/Game.js';
 import { clamp, smoothstep } from './util.js';
 import { createTerrain, buildGroundMesh, buildSkirtGeometry, LAKE, BUTTE, CRAG, AX, AZ, PX, PZ } from './terrain.js';
-import { makeMaskTexture, makeAerialMaterial, syncAerial, liftVertexAlbedo } from './materials.js';
+import { makeMaskTexture, makeAerialMaterial, syncAerial, liftVertexAlbedo, setAerialPivot } from './materials.js';
 import { createGrass, createFlowers, createTrees, createBushes } from './vegetation.js';
-import { createRocks, createRuin, createWater, createLandmarks } from './props.js';
+import { createRocks, createRuin, createWater, createLandmarks, createMotes } from './props.js';
 
 /**
  * WORLD SYSTEM — owned by the world builder. Owns everything you stand on or walk past:
@@ -31,7 +31,7 @@ const toWorld = (u, v) => [u * AX + v * PX, u * AZ + v * PZ];
 export function createWorld() {
   let ctx, T;
   const bounds = { radius: 420 };
-  let ground, skirt, grass, water, landmarks;
+  let ground, skirt, grass, water, landmarks, motes;
   const aerialMats = [];
   const counts = {};
   const _n = new THREE.Vector3();
@@ -117,76 +117,115 @@ export function createWorld() {
             uniform sampler2D uMask;
             uniform vec3 uSoil, uSoilDark, uRock, uRockWarm, uSand, uCanopy;
             varying vec4 vGMask; varying vec3 vGW; varying vec3 vGN;
-            vec2 rot2g(vec2 p, float a) { float c = cos(a), s = sin(a); return vec2(c*p.x - s*p.y, s*p.x + c*p.y); }`)
+            vec2 rot2g(vec2 p, float a) { float c = cos(a), s = sin(a); return vec2(c*p.x - s*p.y, s*p.x + c*p.y); }
+            // ---------------------------------------------------------------
+            // THE REASON THIS GROUND MEASURED FLAT.
+            //
+            // uMask packs three fbm fields normalised to fill 0..1 by min/max. But a
+            // 4-octave fbm is not UNIFORM over that range, it is a narrow bell:
+            // measured mean 0.52, standard deviation 0.15. So a term written as
+            // "0.79 + 0.44 * n" -- which reads like a +/-22% swing -- actually
+            // delivers +/-6.6%, and a threshold written as smoothstep(0.76, 0.97, n)
+            // fires on well under 1% of the surface. Every material blend and every
+            // value break in the previous version was authored at roughly a quarter
+            // of the amplitude it appears to have, and the soil / rock layers
+            // essentially never crossed their thresholds on flat ground at all.
+            //
+            // Measured consequence: our meadow rendered 7 levels of luminance spread
+            // where pw_11 and pw_15 measure 31-36. One olive value from the player's
+            // feet to the base of the hills.
+            //
+            // xp() expands a sample about 0.5 so the constants below mean what they
+            // look like they mean. It also clips the tails, which is exactly the
+            // shape reference #11 wants: patch INTERIORS go flat and calm, and all
+            // the local contrast lands on a handful of visible BOUNDARIES per square
+            // metre rather than as an even sizzle over the whole frame.
+            float xp(float v, float k) { return clamp((v - 0.5) * k + 0.5, 0.0, 1.0); }`)
           .replace('#include <color_fragment>', `#include <color_fragment>
             {
               vec2 w = vGW.xz;
-              // four scales, each rotated by a different angle so the 256px tile never
+              // five scales, each rotated by a different angle so the 256px tile never
               // lines up with itself across octaves
               vec3 nM = texture2D(uMask, rot2g(w, 0.31) * 0.00714).rgb;   // ~140 m
               vec3 nA = texture2D(uMask, rot2g(w, 1.17) * 0.04350).rgb;   // ~23 m
+              vec3 nD = texture2D(uMask, rot2g(w, 1.94) * 0.10870).rgb;   // ~9.2 m
               vec3 nB = texture2D(uMask, rot2g(w, 2.42) * 0.23260).rgb;   // ~4.3 m
               vec3 nC = texture2D(uMask, rot2g(w, 0.83) * 0.86960).rgb;   // ~1.15 m
 
               float dist = length(vGW - cameraPosition);
-              float nearAmt = 1.0 - smoothstep(14.0, 42.0, dist);
+              float nearAmt = 1.0 - smoothstep(20.0, 60.0, dist);
               float slope = 1.0 - clamp(normalize(vGN).y, 0.0, 1.0);
 
               // ---- layer 1: living grass ----------------------------------
               vec3 grass = diffuseColor.rgb;
-              // clumping: lush dark tussocks against drier straw. This is the term the
-              // frames were missing entirely -- a real meadow changes value every metre
-              // or two, ours changed every eighty.
-              float clump = nB.g * 0.60 + nA.b * 0.40;
-              grass *= 0.79 + 0.44 * clump;
-              float straw = smoothstep(0.48, 0.86, nB.r * 0.65 + nA.r * 0.35 + (1.0 - vGMask.w) * 0.22);
-              grass = mix(grass, grass * vec3(1.20, 1.04, 0.58), straw * 0.66);
-              float deep = smoothstep(0.54, 0.14, nA.g * 0.7 + nB.b * 0.3);
-              grass = mix(grass, grass * vec3(0.70, 0.90, 0.70), deep * 0.58);
+              // tussocks: lush dark clumps against drier straw, at the 4 m scale you
+              // actually read from standing height, drifting over 23 m.
+              float tuss = xp(nB.g * 0.58 + nA.b * 0.42, 2.7);
+              grass *= 0.64 + 0.72 * tuss;
+              // 1-9 m stipple on top, so a tussock interior is not itself flat
+              float fine = xp(nC.g * 0.55 + nD.r * 0.45, 2.4);
+              grass *= 0.88 + 0.24 * fine;
+              // sun-bleached straw: warmer AND lighter, ~25% of the surface
+              float straw = smoothstep(0.46, 0.80, xp(nB.r * 0.55 + nA.r * 0.45, 2.6) + (1.0 - vGMask.w) * 0.22);
+              grass = mix(grass, grass * vec3(1.44, 1.14, 0.44), straw * 0.78);
+              // damp hollows: darker, cooler green, ~20%
+              float deep = smoothstep(0.44, 0.08, xp(nA.g * 0.55 + nB.b * 0.45, 2.6));
+              grass = mix(grass, grass * vec3(0.54, 0.86, 0.76), deep * 0.74);
 
               // ---- layer 2: worn / trodden soil ----------------------------
-              vec3 soil = mix(uSoilDark, uSoil, clamp(nB.b * 0.7 + nC.r * 0.3, 0.0, 1.0));
-              soil *= 0.90 + 0.20 * nA.b;
+              vec3 soil = mix(uSoilDark, uSoil, xp(nB.b * 0.6 + nC.r * 0.4, 2.2));
+              soil *= 0.84 + 0.32 * xp(nD.b, 2.0);
 
-              // ---- layer 3: exposed rock -----------------------------------
-              vec3 rock = mix(uRock, uRockWarm, nA.r) * (0.80 + 0.40 * nB.b);
+              // ---- layer 3: exposed rock / gravel --------------------------
+              vec3 rock = mix(uRock, uRockWarm, xp(nA.r, 2.0)) * (0.72 + 0.56 * xp(nB.b, 2.2));
 
               // ---- weights, with noise-broken edges ------------------------
-              float soilW = vGMask.x * 1.05 + smoothstep(0.76, 0.97, nA.b * 0.55 + nM.r * 0.45) * 0.55;
-              soilW = smoothstep(0.34, 0.74, soilW + (nB.r - 0.5) * 0.42 + (nC.g - 0.5) * 0.18);
+              // Reference #8 and the blind critique both ask for the ground to change
+              // material three or four times across a single shot. The authored masks
+              // only carry paths, shoreline and steep slopes, none of which cross the
+              // open starting meadow -- so a genuine patch term has to put worn earth
+              // and gravel into flat grass as well. ~15% soil, ~7% gravel by area.
+              float soilPatch = smoothstep(0.62, 0.93, xp(nA.b * 0.45 + nD.g * 0.35 + nB.r * 0.20, 2.8));
+              float soilW = clamp(vGMask.x * 1.05 + soilPatch * 0.90 + (1.0 - vGMask.w) * 0.55, 0.0, 1.0);
               soilW *= 1.0 - vGMask.z * 0.7;
 
-              float rockW = vGMask.y * 1.15 + smoothstep(0.34, 0.72, slope) * 0.70;
-              rockW = smoothstep(0.36, 0.78, rockW + (nA.r - 0.5) * 0.45 + (nB.g - 0.5) * 0.22);
-              // scattered gravel where nothing grows, so bare ground is never one colour
-              rockW = max(rockW, smoothstep(0.88, 0.98, nB.b) * 0.55 * (1.0 - vGMask.w));
+              float rockPatch = smoothstep(0.74, 0.98, xp(nB.b * 0.5 + nA.r * 0.5, 2.9));
+              float rockW = clamp(vGMask.y * 1.15 + smoothstep(0.30, 0.66, slope) * 0.85
+                                  + rockPatch * 0.75 * (0.35 + 0.65 * (1.0 - vGMask.w)), 0.0, 1.0);
 
               // never a full handover — real worn ground keeps stubble in it, and a
               // 100% soil patch reads as a decal stuck on the meadow
-              vec3 col = mix(grass, soil, soilW * 0.82);
-              col = mix(col, rock, rockW);
-              col = mix(col, uSand * (0.88 + 0.24 * nB.r), vGMask.z * 0.88);
+              vec3 col = mix(grass, soil, soilW * 0.80);
+              col = mix(col, rock, rockW * 0.88);
+              col = mix(col, uSand * (0.80 + 0.42 * xp(nB.r, 2.2)), vGMask.z * 0.88);
+
+              // loose stones in the near field: small, dark, sparse. This is the only
+              // term allowed to be high-frequency, and it dies off by 60 m.
+              float peb = smoothstep(0.85, 0.99, xp(nC.r * 0.6 + nC.g * 0.4, 2.6)) * nearAmt;
+              col = mix(col, rock * 0.66, peb * 0.55 * (1.0 - vGMask.z));
 
               // ---- large-scale value: light and dark sweeps across the meadow
               // (pw_11 and pw_15 both read as broad soft shadow shapes over the grass)
-              col *= 0.82 + 0.36 * (nM.g * 0.55 + nA.g * 0.45);
-              // ---- finest grain, near field only, deliberately small --------
-              col *= 1.0 + (nC.b - 0.5) * 0.16 * nearAmt;
+              col *= 0.80 + 0.40 * xp(nM.g * 0.5 + nA.g * 0.5, 2.2);
+              // ---- finest grain, near field only ---------------------------
+              col *= 1.0 + (xp(nC.b, 2.2) - 0.5) * 0.26 * nearAmt;
 
               // ---- fade the bare terrain into the blade carpet's own colour -
               // The instanced blades stop at a fixed radius. Against an untinted
               // backing plane that produced a visible RING in the wide shot and a hard
               // horizontal BAND SEAM in the over-shoulder. Pushing the ground toward
               // the carpet's average albedo over the same distance band removes the
-              // handoff instead of hiding it.
-              float far = smoothstep(26.0, 140.0, dist);
-              vec3 canopy = mix(col, uCanopy, 0.58) * (0.88 + 0.26 * (nB.g * 0.6 + nA.b * 0.4));
-              col = mix(col, canopy, far * vGMask.w * 0.85);
+              // handoff instead of hiding it. The target colour carries the tussock
+              // term with it, so the mid ground keeps its variation rather than
+              // dissolving into one flat wash the moment the blades stop.
+              float far = smoothstep(30.0, 150.0, dist);
+              vec3 canopy = mix(col, uCanopy * (0.64 + 0.74 * tuss), 0.55);
+              col = mix(col, canopy, far * vGMask.w * 0.80);
 
               diffuseColor.rgb = col;
             }`);
       };
-      groundMat.customProgramCacheKey = () => 'groundmat2';
+      groundMat.customProgramCacheKey = () => 'groundmat3';
 
       ground = new THREE.Mesh(geo, groundMat);
       ground.receiveShadow = true;
@@ -195,9 +234,11 @@ export function createWorld() {
       c.scene.add(ground);
 
       // ---------------------------------------------------------- horizon skirt
-      const skirtMat = makeAerialMaterial({ color: 0x94a08c, maxHaze: 0.90, desat: 0.62 });
+      const skirtMat = makeAerialMaterial({ color: 0x94a08c, maxHaze: 0.90, desat: 0.50, form: 0.80 });
       aerialMats.push(skirtMat);
-      skirt = new THREE.Mesh(buildSkirtGeometry(c, T, bounds.radius + 30, 3000, 26, 96), skirtMat);
+      const skirtGeo = buildSkirtGeometry(c, T, bounds.radius + 30, 3000, 26, 96);
+      setAerialPivot(skirtMat, skirtGeo);
+      skirt = new THREE.Mesh(skirtGeo, skirtMat);
       skirt.frustumCulled = false;
       skirt.name = 'horizon';
       c.scene.add(skirt);
@@ -235,6 +276,11 @@ export function createWorld() {
       grass = createGrass(c, T);
       c.scene.add(grass.group);
 
+      // night practicals — invisible in daylight, see createMotes
+      motes = createMotes(c, T, rng.fork(113));
+      c.scene.add(motes.mesh);
+      counts.motes = motes.count;
+
       // ---------------------------------------------------------- ruins
       const ruinRng = rng.fork(97);
       const [rx, rz] = toWorld(30, -34);
@@ -251,6 +297,7 @@ export function createWorld() {
       if (water) water.material.uniforms.uTime.value = c.elapsed;
       const sky = c.get('sky');
       syncAerial(aerialMats, c.scene, sky);
+      motes?.update(c.elapsed, sky?.getNightAmount ? sky.getNightAmount() : 0);
       if (water && sky?.getSunDirection) {
         water.material.uniforms.uSun.value.copy(sky.getSunDirection());
         water.material.uniforms.uSunCol.value.copy(sky.getSunColor());
@@ -333,6 +380,7 @@ export function createWorld() {
         rocks: counts.rocks ?? 0,
         flowers: counts.flowers ?? 0,
         bushes: counts.bushes ?? 0,
+        motes: counts.motes ?? 0,
       };
     },
   };

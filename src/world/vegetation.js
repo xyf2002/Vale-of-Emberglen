@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { clamp, lerp, smoothstep, hash2i } from './util.js';
 import { mergeGeos, paint } from './materials.js';
+import { AX, AZ } from './terrain.js';
 
 const C = (hex) => new THREE.Color(hex).convertSRGBToLinear();
 
@@ -208,10 +209,14 @@ export function createGrass(ctx, T) {
           normal = normalize(vGrassN);
           nonPerturbedNormal = normal;`)
         .replace('#include <color_fragment>', `#include <color_fragment>
-          // gentle root occlusion only -- reference #9 calls crease occlusion
-          // "present but gentle". The old 0.46 floor crushed the bottom two thirds
-          // of every blade, and at a grazing view that is most of what you see.
-          diffuseColor.rgb *= mix(0.76, 1.05, smoothstep(0.0, 0.55, vBladeH));`);
+          // Root occlusion. A carpet of blades reads as a TEXTURE because each blade
+          // is dark where it enters the mat and bright at the tip -- that root-to-tip
+          // ramp is most of the local contrast in the reference meadows (pw_15's
+          // foreground grass measures 36 levels of luminance spread; a uniform-value
+          // blade field measures 7). 0.76 -> 1.05 was too gentle to read at all past
+          // two metres. 0.60 -> 1.16 still keeps the base above the "crushed to black"
+          // line reference #9 warns about, while giving the carpet real structure.
+          diffuseColor.rgb *= mix(0.60, 1.16, smoothstep(0.0, 0.62, vBladeH));`);
       applyFoliageWrap(sh, 0.66);
     };
     m.customProgramCacheKey = () => 'grassblade';
@@ -308,9 +313,11 @@ export function createGrass(ctx, T) {
           // thinner cover => drier, more exposed blades, so the bald spots read
           col.lerp(GRASS_PAL.dry, (1 - cov) * 0.35);
           // Tuft-to-tuft value spread. Too wide and the brightest tufts catch the
-          // tip highlight as well and the meadow glitters like tinsel; 0.78-1.22
-          // keeps the variegation without the sparkle.
-          const v = 0.78 + 0.44 * h3;
+          // tip highlight as well and the meadow glitters like tinsel. 0.70-1.30 is
+          // as far as that goes before it sparkles, and it is worth taking: this and
+          // the root-to-tip ramp are the two terms that turn a field of instanced
+          // cards into something that measures like a carpet.
+          const v = 0.70 + 0.60 * h3;
           col.multiplyScalar(v);
           mesh.setColorAt(n, col);
           n++;
@@ -337,24 +344,38 @@ export function createGrass(ctx, T) {
 
 function flowerGeometry(petals = 5) {
   const parts = [];
+  // ------------------------------------------------------------------------
+  // THE INVISIBLE FLOWERS.
+  //
+  // 656 flowers were being placed and not one of them appeared in any capture.
+  // They were not culled and they were not mis-coloured: the bloom sat at 0.25 m
+  // and the grass around it is instanced at 0.30-0.40 m, so every single flower in
+  // the world was standing UNDER the blade carpet. Three rounds of "add more
+  // flower clusters" moved the measured colour count by exactly zero, twice, which
+  // is what finally pointed at the height rather than the count.
+  //
+  // Reference #8 wants flower clusters visible as clusters. The bloom now sits at
+  // 0.47 m, clear of the 0.30-0.40 m blade line with room for the wind lean.
+  // ------------------------------------------------------------------------
+  const STEM = 0.46, HEAD = 0.47;
   // stem
-  const stem = new THREE.PlaneGeometry(0.014, 0.24).translate(0, 0.12, 0);
+  const stem = new THREE.PlaneGeometry(0.016, STEM).translate(0, STEM * 0.5, 0);
   parts.push(paint(stem, 0x6f8a3e));
   const stem2 = stem.clone().rotateY(Math.PI / 2);
   parts.push(paint(stem2, 0x6f8a3e));
   // petals
   for (let p = 0; p < petals; p++) {
     const a = (p / petals) * Math.PI * 2;
-    const pet = new THREE.PlaneGeometry(0.048, 0.075);
+    const pet = new THREE.PlaneGeometry(0.062, 0.096);
     pet.rotateX(-Math.PI / 2);
-    pet.translate(0, 0, 0.048);
+    pet.translate(0, 0, 0.060);
     pet.rotateX(-0.30);
     pet.rotateY(a);
-    pet.translate(0, 0.245, 0);
+    pet.translate(0, HEAD, 0);
     parts.push(paint(pet, 0xffffff));
   }
   // centre
-  const mid = new THREE.CircleGeometry(0.022, 6).rotateX(-Math.PI / 2).translate(0, 0.252, 0);
+  const mid = new THREE.CircleGeometry(0.028, 6).rotateX(-Math.PI / 2).translate(0, HEAD + 0.008, 0);
   parts.push(paint(mid, 0xffd75a));
   return mergeGeos(parts);
 }
@@ -367,13 +388,18 @@ export function createFlowers(ctx, T, rng) {
   const spots = [];
 
   const q = clamp(ctx.quality.grassDensity ?? 1, 0.3, 1.5);
-  // clusters of 5-15 blooms — never an even scatter (reference observation #8)
-  const clusters = Math.round(46 * q);
+  // Clusters of 5-15 blooms — never an even scatter (reference observation #8).
+  // Reference #8 also says flowers appear "in a couple of spots PER FRAME"; at 46
+  // clusters spread over a 230 m disc the expected count inside any one gameplay
+  // framing was well under one, so in practice the meadow had none. More clusters,
+  // and the inner radius pulled in to 5 m so some of them land in the near field
+  // where they read as flowers rather than as coloured specks.
+  const clusters = Math.round(78 * q);
   for (let i = 0; i < clusters; i++) {
     let cx = 0, cz = 0, ok = false;
     for (let t = 0; t < 24; t++) {
       const a = rng.next() * Math.PI * 2;
-      const r = 12 + Math.sqrt(rng.next()) * 230;
+      const r = 5 + Math.pow(rng.next(), 0.8) * 210;
       cx = Math.cos(a) * r; cz = Math.sin(a) * r;
       if (T.slopeAt(cx, cz) > 0.30) continue;
       if (T.grassAt(cx, cz) < 0.55) continue;
@@ -386,16 +412,29 @@ export function createFlowers(ctx, T, rng) {
     const rad = rng.range(0.7, 2.6);
     spots.push({ cx, cz, n, rad, hue, scale: rng.range(0.85, 1.35) });
   }
-  // two or three broad drifts, like the pink field in pw_11
-  const drifts = Math.round(3 * q);
+  // Broad drifts, like the pink field pw_11 lays across its middle distance. That
+  // field is a big part of why pw_11 renders 1056 distinct colours where our
+  // over-shoulder renders 362: it puts a large mass of a hue that appears NOWHERE
+  // else in the frame into the mid ground. Three drifts scattered over a 195 m disc
+  // meant a given camera framing usually contained zero of them.
+  // Half of them are aimed down the composed vista axis rather than scattered over
+  // the full 360 degrees. With seven drifts on a random azimuth the expected number
+  // inside a 62-degree framing is about 1.2, and it was landing behind the player:
+  // adding drifts changed the measured colour count by literally zero. The world is
+  // composed around one axis (see terrain.js) and every wide shot looks along it, so
+  // that is where the mid-ground colour mass belongs.
+  const AXA = Math.atan2(AZ, AX);
+  const drifts = Math.round(7 * q);
   for (let i = 0; i < drifts; i++) {
-    for (let t = 0; t < 30; t++) {
-      const a = rng.next() * Math.PI * 2;
-      const r = 45 + Math.sqrt(rng.next()) * 150;
+    for (let t = 0; t < 40; t++) {
+      const a = (i % 2 === 0)
+        ? AXA + rng.range(-0.85, 0.85)
+        : rng.next() * Math.PI * 2;
+      const r = 22 + Math.sqrt(rng.next()) * 145;
       const cx = Math.cos(a) * r, cz = Math.sin(a) * r;
-      if (T.slopeAt(cx, cz) > 0.22 || T.grassAt(cx, cz) < 0.7) continue;
+      if (T.slopeAt(cx, cz) > 0.24 || T.grassAt(cx, cz) < 0.66) continue;
       if (T.heightAt(cx, cz) < T.waterLevel + 1.5) continue;
-      spots.push({ cx, cz, n: rng.int(90, 150), rad: rng.range(9, 17), hue: rng.pick([0xef7fa8, 0xf6b3cd, 0xfaf3ee]), scale: rng.range(0.9, 1.2) });
+      spots.push({ cx, cz, n: rng.int(110, 190), rad: rng.range(8, 18), hue: rng.pick([0xef7fa8, 0xf6b3cd, 0xfaf3ee, 0xe4d36a]), scale: rng.range(0.9, 1.25) });
       break;
     }
   }

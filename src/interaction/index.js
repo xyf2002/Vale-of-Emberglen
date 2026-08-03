@@ -63,11 +63,41 @@ export function createInteraction() {
   const MARK_RANGE = 90;      // where the dimmed "you left this one half-tamed" marker lives
   let taughtBerries = false;  // one-time signpost when the satchel runs dry
 
-  function note(text, kind = 'info') {
+  /**
+   * NOTIFICATIONS, THE ONE RULE: a line the player has just read is not information, it is
+   * noise. A measured session ended with "No berries left — a bush is 30m west" printed
+   * FOUR TIMES in a single beat, which reads as a bug and shoved the one moment that
+   * mattered — a creature becoming a companion — off the bottom of the stack.
+   *
+   * So: the same sentence cannot repeat inside `gap` seconds, and two different sentences
+   * cannot land inside `spacing` seconds of each other unless the second one is important.
+   * Everything the player needs continuously (how many berries, where a bush is, what a
+   * creature costs) lives in the prompt, which is allowed to persist because it does not
+   * stack.
+   */
+  const noteSeen = new Map();
+  let lastNoteT = -99;
+  let quietUntil = -99;      // the payoff gets the screen to itself for a few seconds
+  const clock = () => ctx?.elapsed ?? 0;
+
+  function note(text, opts = {}) {
+    const { kind = 'info', gap = 10, spacing = 0.6, ttl, toast = true, quiet = 0 } = opts;
+    const t = clock();
+    const seen = noteSeen.get(text);
+    if (seen !== undefined && t - seen < gap) return false;
+    if (kind !== 'bond') {
+      if (t - lastNoteT < spacing) return false;
+      if (t < quietUntil) return false;
+    }
+    noteSeen.set(text, t);
+    if (noteSeen.size > 48) noteSeen.delete(noteSeen.keys().next().value);
+    lastNoteT = t;
+    if (quiet) quietUntil = t + quiet;
     log.push(text);
     if (log.length > 24) log.shift();
-    ui?.notify?.(text);
+    if (toast) ui?.notify?.(text, ttl ? { ttl } : undefined);
     ctx?.bus?.emit?.('interact:hint', { text, kind });
+    return true;
   }
 
   function setInventory(item, delta) {
@@ -95,6 +125,12 @@ export function createInteraction() {
     /** {stage,name,trust,need,within,settling} for any creature — the UI's single source */
     readout(cr) { return cr ? taming?.readout?.(cr) ?? null : null; },
     get companions() { return companion?.members ?? []; },
+    /** where to restock: the nearest bush that still has berries on it, or null */
+    get forage() {
+      if (!resources || !player) return null;
+      const b = nearestBush(player.position);
+      return b ? { position: b.node.position, dist: b.d, dir: b.dir } : null;
+    },
     get arc() { return taming?.arc ?? []; },
 
     init(c) {
@@ -111,7 +147,17 @@ export function createInteraction() {
       offering = createOffering(c, { player, world, fx });
       companion = createCompanion(c, { player, world, fx, bus: c.bus });
 
-      resources.populate(player?.position);
+      // A companion forages for you. This is the only source of berries that finds YOU,
+      // and it is the reason a bonded creature is worth having rather than just a thing
+      // that follows: the verb that made it yours is the verb it gives back.
+      c.bus.on('companion:gift', (p) => {
+        const n = p?.amount ?? 1;
+        setInventory(p?.item ?? 'berry', n);
+        const at = p?.position ?? p?.creature?.position;
+        if (at) fx.count(tmp.copy(at).setY(at.y + 0.85), `+${n}`, '#ffb0c2');
+        note(`${p?.creature?.def?.name ?? 'Your companion'} noses out a berry for you.`,
+          { kind: 'gift', gap: 12 });
+      });
 
       // The first five minutes need something to walk up to. If the creature layer
       // happened to scatter everyone over the horizon, seed one encounter within
@@ -127,6 +173,11 @@ export function createInteraction() {
           }
         }
       } catch { /* creature layer mid-rewrite: not fatal */ }
+
+      // Berries last, and seeded around the animals: see Resources.populate.
+      const grazing = [];
+      for (const cr of creatures?.list ?? []) if (cr?.position && grazing.length < 10) grazing.push(cr.position);
+      resources.populate(player?.position, grazing);
     },
 
     update(dt, c) {
@@ -144,7 +195,8 @@ export function createInteraction() {
           total: inventory[h.item], position: h.position.clone(),
         });
         note(h.kind === 'berry' ? `Picked ${h.amount} berries.`
-          : h.kind === 'wood' ? `Gathered ${h.amount} sticks.` : `Chipped off ${h.amount} stone.`);
+          : h.kind === 'wood' ? `Gathered ${h.amount} sticks.` : `Chipped off ${h.amount} stone.`,
+        { kind: 'gather', gap: 5, spacing: 0 });
         if (gathering === h.node) gathering = null;
       }
       if (gathering && gathering.channel <= 0) gathering = null;
@@ -224,14 +276,22 @@ export function createInteraction() {
         if (st.trust >= 0.999) {
           taming.complete(cr);
           companion.add(cr);
-          note(`${cr.def?.name ?? 'It'} will follow you now.`);
+          // The banner, the roster line and the chord ARE the announcement. A toast saying
+          // the same words in the corner at the same moment is not emphasis, it is clutter —
+          // and it buys four seconds of silence for everything else.
+          note(`${cr.def?.name ?? 'It'} will follow you now.`,
+            { kind: 'bond', gap: 0, toast: false, quiet: 4.5 });
         }
       }
 
       companion.update(dt);
 
       // ---- focus + prompt -------------------------------------------------
-      const node = resources.nearest(pp, 0.6);
+      // A bush you have already stripped must never hide a bush you have not, so the ready
+      // one is looked for first and only falls back to the empty one for its "grow back" line.
+      const readyNode = resources.nearest(pp, 0.6, true);
+      const node = readyNode ?? resources.nearest(pp, 0.6);
+      const nodeDist = node ? node.position.distanceTo(pp) : Infinity;
       let crFocus = null, crDist = Infinity;
       if (primary && !primary.tamed) {
         crDist = primary.position.distanceTo(pp);
@@ -254,10 +314,13 @@ export function createInteraction() {
         if (score > markScore) { markScore = score; marked = cr; }
       }
 
+      // Whichever is actually nearer wins, except that a creature within reach of your hand
+      // always beats scenery. Widening the bush reach without this would have let a shrub
+      // four metres away steal the card off a creature three metres away.
       let next = null;
       if (crFocus && (crDist <= HAND_RANGE || !node)) next = crFocus;
-      else if (node) next = node;
-      else next = crFocus;
+      else if (node && (!crFocus || nodeDist < crDist)) next = node;
+      else next = crFocus ?? node;
 
       if (next !== focus) {
         focus = next;
@@ -268,16 +331,22 @@ export function createInteraction() {
 
       // ---- input ---------------------------------------------------------
       if (input.justPressed('interact')) {
-        if (focus && focus.kind && focus.ready && !gathering) {
-          if (resources.beginGather(focus)) {
-            gathering = focus;
-            c.bus.emit('gather:start', { node: focus, kind: focus.kind });
-            fx.ring(focus.position, { r0: 0.25, r1: 0.95, dur: 0.4, color: 0xfff0c8, opacity: 0.45 });
-          }
-        } else if (crFocus && crDist < 2.4 && taming.stateOf(crFocus).trust >= 0.55 && taming.stateOf(crFocus).petCd <= 0) {
+        // E gathers whatever is in reach, whether or not the reticle happens to be on it.
+        // The game tells the player "press E at a bush"; standing at a bush and being told
+        // nothing happened because the card was showing a fox instead is the kind of gap
+        // that makes an entire economy look broken.
+        const petable = crFocus && crDist < 2.4
+          && taming.stateOf(crFocus).trust >= 0.55 && taming.stateOf(crFocus).petCd <= 0;
+        if (petable) {
           taming.onPet(crFocus);
-        } else if (focus && focus.kind && !focus.ready) {
-          note('Picked clean — it will grow back.');
+        } else if (readyNode && !gathering) {
+          if (resources.beginGather(readyNode)) {
+            gathering = readyNode;
+            c.bus.emit('gather:start', { node: readyNode, kind: readyNode.kind });
+            fx.ring(readyNode.position, { r0: 0.25, r1: 0.95, dur: 0.4, color: 0xfff0c8, opacity: 0.45 });
+          }
+        } else if (node && !node.ready && !gathering) {
+          note('Picked clean — it will grow back.', { gap: 14 });
         }
       }
 
@@ -398,6 +467,11 @@ export function createInteraction() {
     if (crDist > OFFER_RANGE) return { text: 'Too far to offer — get closer', key: null };
 
     const line = costLine(r.need);
+    // A creature with its mouth full will not take another berry, so the game must not
+    // advertise the key, and pressing it must not spend one. Throwing your whole satchel
+    // into the grass at an animal that is still chewing is how a five-minute session ran
+    // itself dry with 2.5 minutes left to play.
+    if (r.settling) return { text: 'Still eating — give it a moment', key: null, cost: line };
     if (crDist <= HAND_RANGE && st.trust >= HAND_TRUST) {
       const alt = st.trust >= 0.67 && st.petCd <= 0 ? 'E to pet' : null;
       return { text: r.need <= 1 ? line : 'Hold the berry out', key: 'F', alt, cost: line };
@@ -412,10 +486,16 @@ export function createInteraction() {
   function doOffer(c, pp, crFocus, crDist) {
     if (handFeed) return;
     if (inventory.berry <= 0) {
+      // Only say it if nothing else already is. When a creature is in prompt range the
+      // card is ALREADY reading "Out of berries — a bush is 10m north-west" and the world
+      // tag is already pointing at that bush; a toast repeating it is the third copy of
+      // one sentence on one screen.
       const bush = nearestBush(pp);
-      note(bush
-        ? `No berries left — a bush is ${Math.round(bush.d)}m ${bush.dir}. Press E at it.`
-        : 'No berries left. Berry bushes grow back — press E at one.');
+      if (!crFocus) {
+        note(bush
+          ? `No berries left — a bush is ${Math.round(bush.d)}m ${bush.dir}. Press E at it.`
+          : 'No berries left. Berry bushes grow back — press E at one.', { gap: 20 });
+      }
       c.bus.emit('taming:offer', { creature: crFocus, mode: 'empty' });
       return;
     }
@@ -424,8 +504,16 @@ export function createInteraction() {
     // a player spend one into empty grass 100m from anything. Refuse, and say why.
     const target0 = crFocus ?? creatures?.nearest?.(pp, OFFER_RANGE, (cr) => !cr.tamed) ?? null;
     if (!target0) {
-      note('Nothing close enough to offer a berry to.');
+      note('Nothing close enough to offer a berry to.', { gap: 16 });
       c.bus.emit('taming:offer', { creature: null, mode: 'nobody' });
+      return;
+    }
+
+    // A mouth that is full takes nothing. Refuse before spending, and say so — the berry
+    // stays in the satchel where it can still buy a friend.
+    if (taming.stateOf(target0).fedCd > 0.4) {
+      note(`${target0.def?.name ?? 'It'} is still eating the last one.`, { gap: 9 });
+      c.bus.emit('taming:offer', { creature: target0, mode: 'busy' });
       return;
     }
 
@@ -465,9 +553,8 @@ export function createInteraction() {
     c.bus.emit('taming:offer', { creature: target, mode: 'toss' });
     const tName = target.def?.name ?? 'it';
     const left = taming.readout(target).need;
-    note(st.fedCd > 0.4
-      ? `You leave a berry for ${tName} — it is still eating the last one.`
-      : `You toss a berry toward ${tName}. ${left <= 1 ? 'This one seals it.' : ''}`.trim());
+    note(`You toss a berry toward ${tName}. ${left <= 1 ? 'This one seals it.' : ''}`.trim(),
+      { kind: 'offer', gap: 5, spacing: 0 });
     const f = offering.toss(tmp, tmp2);
     if (f) f.intended = target;
   }
