@@ -1,15 +1,21 @@
 {
   "goal": "A 5-minute playable vertical slice that captures the core fantasy of Palworld: a beautiful third-person world, charming creatures, meaningful interaction, and believable creature behaviour.",
   "bar": "The real Palworld. A fresh critic is shown our capture beside an official Palworld frame — same shot type, same resolution, same format, labels stripped, order shuffled — and asked which one is the shipped commercial game. We are done when critics stop reliably picking correctly.",
-  "currentRound": "r10",
-  "currentState": "round 10 running — close the berry economy dead-end, celebrate the bond, and finish terrain surface detail",
+  "currentRound": "r11",
+  "currentState": "round 11 running — cast shadows, which a blind critic named as upstream of most remaining visual complaints",
   "pickRate": 0.0,
   "metrics": {
     "caption": "Objective guardrails, measured with tools/measure.py against the real reference frames. Not the bar — a critic's eye is — but they stop arguments about whether a change helped. Two bands were corrected in r08 after being measured from the reference rather than invented.",
     "rows": [
       {
+        "name": "local contrast / fine detail",
+        "ours": "5.09 – 7.33 (daylight)",
+        "target": "5.0 – 10.0",
+        "status": "pass"
+      },
+      {
         "name": "ground/sky luminance ratio",
-        "ours": "0.68 – 0.87",
+        "ours": "0.65 – 0.83",
         "target": "0.63 – 0.96",
         "status": "pass"
       },
@@ -20,59 +26,77 @@
         "status": "pass"
       },
       {
-        "name": "dusk mean luminance",
-        "ours": "50.7",
-        "target": "≈50.7 (pw_16)",
-        "status": "pass"
-      },
-      {
-        "name": "creature contact shadows",
-        "ours": "rendering",
-        "target": "rendering",
-        "status": "pass"
-      },
-      {
-        "name": "playtest reaches 5 minutes",
-        "ours": "309 sim seconds",
-        "target": "300",
+        "name": "berry economy recovers from zero",
+        "ours": "yes — ends at 7",
+        "target": "recovers",
         "status": "pass"
       },
       {
         "name": "naive player tames a companion",
-        "ours": "1",
+        "ours": "2",
         "target": "≥ 1",
         "status": "pass"
       },
       {
-        "name": "local contrast / fine detail",
-        "ours": "1.7 – 5.2",
-        "target": "5.0 – 10.0",
+        "name": "species discovered in 5 min",
+        "ours": "4 of 4",
+        "target": "4 of 4",
+        "status": "pass"
+      },
+      {
+        "name": "repeated HUD lines per beat",
+        "ours": "0 of 28",
+        "target": "0",
+        "status": "pass"
+      },
+      {
+        "name": "cast shadows contribute to image",
+        "ours": "0.36 / 255 — none",
+        "target": "> 8 / 255",
         "status": "fail"
       },
       {
-        "name": "berry economy recovers from zero",
-        "ours": "never — 11/28 beats at zero",
-        "target": "≥ 2 recoveries",
+        "name": "blind A/B pick rate",
+        "ours": "0% (5/5 identified)",
+        "target": "coin flip",
         "status": "fail"
       }
     ]
   },
   "openGaps": [
-    "Local contrast is the last big visual gap: 3.5–4.2 on the wide shots against the reference's 7.5–9.9. The ground is one uniform value across 40–70% of every frame. Both the blind critic and the objective measure named this independently.",
-    "The berry economy dead-ends: the count goes 6→3→0 and never recovers, leaving the player locked out of the core loop for the last 2.5 minutes even though the game correctly signposts where to restock.",
-    "The bond moment — the emotional peak of the slice — happens without celebration, buried under a berry warning repeated four times.",
-    "dusk_mood is the weakest frame: local contrast 1.66 and 146 distinct colours against the reference night frame's 422; the starfield reads as a hard-clipped rectangular patch.",
-    "Distant trees float: terrain fogs to sky-white while darker canopies survive the fade.",
-    "Only 2 of 4 species get recorded in five minutes.",
-    "Reference gap: only 1 of 17 official stills is early-game peaceful exploration, so interaction_feed has no honest comp and is judged on the art-direction rubric instead.",
-    "Reference gap: the trailer never shows a creature noticing an approaching player, so behaviour_approach has no fair comp and is graded against the 12 written criteria."
+    "NOTHING CASTS A SHADOW. Measured: turning the shadow map off changes the image by 0.36/255 despite 79 casters, 48 receivers and a valid 2048 map. A blind critic names this as upstream of most other complaints — including 'the grass looks painted past ten metres', which survived two rounds of terrain work.",
+    "Blind A/B still 5/5 identified. Art direction, judged separately, went 2/5 to us: 'a herd of Woolkin grazing among berry bushes IS the game'.",
+    "dusk_mood is the weakest frame: local contrast 3.21 against the reference night frame's 5.16.",
+    "Two creatures of one species share a display name, so the bond banner can name a different individual than the reticle.",
+    "The scripted player never deliberately navigates to a bush, so restock leans on companion foraging; a human following the on-screen tag would restock faster than the instrument can show.",
+    "Reference gap: only 1 of 17 official stills is early-game peaceful exploration, so interaction_feed has no honest comp.",
+    "Reference gap: the trailer never shows a creature noticing an approaching player, so behaviour_approach is graded against the 12 written criteria."
   ],
   "rounds": [
+    {
+      "id": "r11",
+      "title": "Cast shadows — the one change",
+      "date": "2026-08-03",
+      "status": "running",
+      "summary": "A blind critic: 'Nothing in any of the five in-dev frames casts a shadow onto anything else, and that single absence produces most of the other symptoms the critics keep re-describing.' I had this evidence two rounds earlier — disabling shadows changed the image by 0.001 — and misread it as 'shadows render but are pure black', blaming a blob that turned out to be an unrelated colour-decode bug. Now measured properly and handed over with the ruled-out list.",
+      "improvements": [
+        "Berry dead-end root-caused: gather reach was 2.6m from the CENTRE of a 2.7m-wide thicket, so 37 of 37 nodes went unharvested for an entire 309-second session while the HUD said 'press E at a bush'. Curve now recovers and ends at 7.",
+        "The bond is celebrated: an 11-second banner, a permanent TRAVELS WITH YOU roster line, a lap of honour, and the companion foraging berries for you afterwards.",
+        "Hint spam eliminated — 0 of 28 beats contain a repeated line, was four identical copies in one beat.",
+        "Species discovery repaced: 4 of 4 recorded in five minutes, was 2 of 4 all session.",
+        "All five daylight shots cleared the local-contrast threshold (5.09-7.33 vs reference 5.2-9.9).",
+        "AI props fixed: a double sRGB decode was crushing them to near-black — the second instance of that bug class in this project.",
+        "Harness hardened: screenshots allow 120s and retry once, after concurrent builder load discarded two otherwise-good verification runs."
+      ],
+      "gaps": [
+        "Cast shadows still absent — the round's whole purpose"
+      ]
+    },
     {
       "id": "r10",
       "title": "Close the loop economy; finish terrain detail",
       "date": "2026-08-03",
-      "status": "running",
+      "status": "done",
       "summary": "Two builders. One closes the berry dead-end and makes the bond moment unmissable; the other finishes the terrain surface-detail work that was interrupted. The visual target is local contrast above 5.0 on every daylight shot without regressing the tonal work of rounds 7–9.",
       "improvements": [
         "Creature contact shadows now render — they were measuring a delta of ~0 under creature feet against a 25-luma shadow under the player's.",

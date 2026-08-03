@@ -59,11 +59,11 @@ code{background:#ffffff12;padding:1px 6px;border-radius:4px;font-size:12.5px}
 </header>
 <main>
   <div class="bar">
-    <div class="stat"><div class="k">Round</div><div class="v">r10</div></div>
-    <div class="stat"><div class="k">State</div><div class="v" style="font-size:15px">round 10 running — close the berry economy dead-end, celebrate the bond, and finish terrain surface detail</div></div>
+    <div class="stat"><div class="k">Round</div><div class="v">r11</div></div>
+    <div class="stat"><div class="k">State</div><div class="v" style="font-size:15px">round 11 running — cast shadows, which a blind critic named as upstream of most remaining visual complaints</div></div>
     <div class="stat"><div class="k">Real-game pick rate</div><div class="v"><span class="meter"><i style="width:0%"></i></span><b>0%</b></div></div>
-    <div class="stat"><div class="k">Improvements landed</div><div class="v">28</div></div>
-    <div class="stat"><div class="k">Open gaps</div><div class="v">8</div></div>
+    <div class="stat"><div class="k">Improvements landed</div><div class="v">35</div></div>
+    <div class="stat"><div class="k">Open gaps</div><div class="v">7</div></div>
   </div>
 
   <h3>The bar</h3>
@@ -72,19 +72,20 @@ code{background:#ffffff12;padding:1px 6px;border-radius:4px;font-size:12.5px}
   <h3 style="margin-top:26px">Measured against the reference</h3>
   <div class="dim" style="font-size:13px;margin-bottom:8px">Objective guardrails, measured with tools/measure.py against the real reference frames. Not the bar — a critic's eye is — but they stop arguments about whether a change helped. Two bands were corrected in r08 after being measured from the reference rather than invented.</div>
   <table><tr><th>Guardrail</th><th>Ours</th><th>Reference target</th><th></th></tr>
-  <tr><td>ground/sky luminance ratio</td><td><b>0.68 – 0.87</b></td><td class="dim">0.63 – 0.96</td>
+  <tr><td>local contrast / fine detail</td><td><b>5.09 – 7.33 (daylight)</b></td><td class="dim">5.0 – 10.0</td>
+    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>ground/sky luminance ratio</td><td><b>0.65 – 0.83</b></td><td class="dim">0.63 – 0.96</td>
     <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>highlight clipping</td><td><b>0.00%</b></td><td class="dim">&lt; 0.5%</td>
-    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>dusk mean luminance</td><td><b>50.7</b></td><td class="dim">≈50.7 (pw_16)</td>
-    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>creature contact shadows</td><td><b>rendering</b></td><td class="dim">rendering</td>
-    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>playtest reaches 5 minutes</td><td><b>309 sim seconds</b></td><td class="dim">300</td>
-    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>naive player tames a companion</td><td><b>1</b></td><td class="dim">≥ 1</td>
-    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>local contrast / fine detail</td><td><b>1.7 – 5.2</b></td><td class="dim">5.0 – 10.0</td>
-    <td><span class="badge" style="--c:#ff8a8a">off target</span></td></tr><tr><td>berry economy recovers from zero</td><td><b>never — 11/28 beats at zero</b></td><td class="dim">≥ 2 recoveries</td>
+    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>berry economy recovers from zero</td><td><b>yes — ends at 7</b></td><td class="dim">recovers</td>
+    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>naive player tames a companion</td><td><b>2</b></td><td class="dim">≥ 1</td>
+    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>species discovered in 5 min</td><td><b>4 of 4</b></td><td class="dim">4 of 4</td>
+    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>repeated HUD lines per beat</td><td><b>0 of 28</b></td><td class="dim">0</td>
+    <td><span class="badge" style="--c:#7fd18b">pass</span></td></tr><tr><td>cast shadows contribute to image</td><td><b>0.36 / 255 — none</b></td><td class="dim">&gt; 8 / 255</td>
+    <td><span class="badge" style="--c:#ff8a8a">off target</span></td></tr><tr><td>blind A/B pick rate</td><td><b>0% (5/5 identified)</b></td><td class="dim">coin flip</td>
     <td><span class="badge" style="--c:#ff8a8a">off target</span></td></tr>
   </table>
 
   <h3>Biggest remaining gaps</h3>
-  <ul><li class="gap">Local contrast is the last big visual gap: 3.5–4.2 on the wide shots against the reference's 7.5–9.9. The ground is one uniform value across 40–70% of every frame. Both the blind critic and the objective measure named this independently.</li><li class="gap">The berry economy dead-ends: the count goes 6→3→0 and never recovers, leaving the player locked out of the core loop for the last 2.5 minutes even though the game correctly signposts where to restock.</li><li class="gap">The bond moment — the emotional peak of the slice — happens without celebration, buried under a berry warning repeated four times.</li><li class="gap">dusk_mood is the weakest frame: local contrast 1.66 and 146 distinct colours against the reference night frame's 422; the starfield reads as a hard-clipped rectangular patch.</li><li class="gap">Distant trees float: terrain fogs to sky-white while darker canopies survive the fade.</li><li class="gap">Only 2 of 4 species get recorded in five minutes.</li><li class="gap">Reference gap: only 1 of 17 official stills is early-game peaceful exploration, so interaction_feed has no honest comp and is judged on the art-direction rubric instead.</li><li class="gap">Reference gap: the trailer never shows a creature noticing an approaching player, so behaviour_approach has no fair comp and is graded against the 12 written criteria.</li></ul>
+  <ul><li class="gap">NOTHING CASTS A SHADOW. Measured: turning the shadow map off changes the image by 0.36/255 despite 79 casters, 48 receivers and a valid 2048 map. A blind critic names this as upstream of most other complaints — including 'the grass looks painted past ten metres', which survived two rounds of terrain work.</li><li class="gap">Blind A/B still 5/5 identified. Art direction, judged separately, went 2/5 to us: 'a herd of Woolkin grazing among berry bushes IS the game'.</li><li class="gap">dusk_mood is the weakest frame: local contrast 3.21 against the reference night frame's 5.16.</li><li class="gap">Two creatures of one species share a display name, so the bond banner can name a different individual than the reticle.</li><li class="gap">The scripted player never deliberately navigates to a bush, so restock leans on companion foraging; a human following the on-screen tag would restock faster than the instrument can show.</li><li class="gap">Reference gap: only 1 of 17 official stills is early-game peaceful exploration, so interaction_feed has no honest comp.</li><li class="gap">Reference gap: the trailer never shows a creature noticing an approaching player, so behaviour_approach is graded against the 12 written criteria.</li></ul>
 
   <h3 style="margin-top:30px">Rounds</h3>
   
@@ -194,7 +195,7 @@ code{background:#ffffff12;padding:1px 6px;border-radius:4px;font-size:12.5px}
     </div>
   </details>
   <details class="round" >
-    <summary>r10 — Close the loop economy; finish terrain detail <span class="badge" style="--c:#e8b45c">running</span>
+    <summary>r10 — Close the loop economy; finish terrain detail <span class="badge" style="--c:#7fd18b">complete</span>
       <span style="margin-left:auto;font-weight:400;color:var(--dim);font-size:13px">2026-08-03</span></summary>
     <div class="body">
       <div class="verdict">Two builders. One closes the berry dead-end and makes the bond moment unmissable; the other finishes the terrain surface-detail work that was interrupted. The visual target is local contrast above 5.0 on every daylight shot without regressing the tonal work of rounds 7–9.</div>
@@ -203,12 +204,32 @@ code{background:#ffffff12;padding:1px 6px;border-radius:4px;font-size:12.5px}
         <div><h3>Gaps found by critics</h3><ul><li class="gap">Berry economy still dead-ends</li><li class="gap">Bond moment still uncelebrated</li><li class="gap">Terrain detail work interrupted partway</li></ul></div>
       </div>
       
+      <h3>Frames</h3><div class="grid"><div class="shot"><img loading="lazy" src="../captures/r10/creature_group.png" alt="creature_group.png">
+        <div class="cap"><span>creature_group</span><span>189 draws</span></div></div><div class="shot"><img loading="lazy" src="../captures/r10/creature_portrait.png" alt="creature_portrait.png">
+        <div class="cap"><span>creature_portrait</span><span></span></div></div><div class="shot"><img loading="lazy" src="../captures/r10/dusk_mood.png" alt="dusk_mood.png">
+        <div class="cap"><span>dusk_mood</span><span></span></div></div><div class="shot"><img loading="lazy" src="../captures/r10/interaction_feed.png" alt="interaction_feed.png">
+        <div class="cap"><span>interaction_feed</span><span></span></div></div><div class="shot"><img loading="lazy" src="../captures/r10/overshoulder_meadow.png" alt="overshoulder_meadow.png">
+        <div class="cap"><span>overshoulder_meadow</span><span></span></div></div><div class="shot"><img loading="lazy" src="../captures/r10/vista_golden.png" alt="vista_golden.png">
+        <div class="cap"><span>vista_golden</span><span>166 draws</span></div></div></div>
+      
+    </div>
+  </details>
+  <details class="round" >
+    <summary>r11 — Cast shadows — the one change <span class="badge" style="--c:#e8b45c">running</span>
+      <span style="margin-left:auto;font-weight:400;color:var(--dim);font-size:13px">2026-08-03</span></summary>
+    <div class="body">
+      <div class="verdict">A blind critic: 'Nothing in any of the five in-dev frames casts a shadow onto anything else, and that single absence produces most of the other symptoms the critics keep re-describing.' I had this evidence two rounds earlier — disabling shadows changed the image by 0.001 — and misread it as 'shadows render but are pure black', blaming a blob that turned out to be an unrelated colour-decode bug. Now measured properly and handed over with the ruled-out list.</div>
+      <div class="cols">
+        <div><h3>Improvements landed</h3><ul><li>Berry dead-end root-caused: gather reach was 2.6m from the CENTRE of a 2.7m-wide thicket, so 37 of 37 nodes went unharvested for an entire 309-second session while the HUD said 'press E at a bush'. Curve now recovers and ends at 7.</li><li>The bond is celebrated: an 11-second banner, a permanent TRAVELS WITH YOU roster line, a lap of honour, and the companion foraging berries for you afterwards.</li><li>Hint spam eliminated — 0 of 28 beats contain a repeated line, was four identical copies in one beat.</li><li>Species discovery repaced: 4 of 4 recorded in five minutes, was 2 of 4 all session.</li><li>All five daylight shots cleared the local-contrast threshold (5.09-7.33 vs reference 5.2-9.9).</li><li>AI props fixed: a double sRGB decode was crushing them to near-black — the second instance of that bug class in this project.</li><li>Harness hardened: screenshots allow 120s and retry once, after concurrent builder load discarded two otherwise-good verification runs.</li></ul></div>
+        <div><h3>Gaps found by critics</h3><ul><li class="gap">Cast shadows still absent — the round's whole purpose</li></ul></div>
+      </div>
+      
       <p class="dim">no captures yet</p>
       
     </div>
   </details>
 </main>
-<footer>Regenerate with <code>node tools/progress.mjs</code> · captures via <code>node tools/capture.mjs --round &lt;id&gt;</code> · generated 2026-08-03T10:45:44.894Z</footer>
+<footer>Regenerate with <code>node tools/progress.mjs</code> · captures via <code>node tools/capture.mjs --round &lt;id&gt;</code> · generated 2026-08-03T12:34:35.449Z</footer>
 <div id="lb"><img></div>
 <script>
 const lb=document.getElementById('lb'),lbi=lb.querySelector('img');
