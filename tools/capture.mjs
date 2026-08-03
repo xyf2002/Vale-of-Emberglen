@@ -64,7 +64,20 @@ const FRAME_PROBE = () => {
  * whole harness throw "shot is not a function" on the first frame and report ok=false
  * for the round. Restored as a real function.)
  */
-const grabFrame = (page, file) => page.screenshot({ path: file, animations: 'disabled' });
+const grabFrame = async (page, file) => {
+  // The 120s timeout and the retry are load-bearing and were lost once already: they
+  // lived in a `shot()` helper, that helper went missing in a rename, and when grabFrame
+  // was written to replace it the timeout did not come back. Playwright's 30s default is
+  // not enough on a swiftshader software rasteriser with several agents capturing at
+  // once, and the failure mode is not a slow run — the harness writes a BLACK FRAME and
+  // then throws, leaving a round directory that measure.py used to grade as a
+  // catastrophic regression. Keep both.
+  try {
+    await page.screenshot({ path: file, animations: 'disabled', timeout: 120000 });
+  } catch {
+    await page.screenshot({ path: file, animations: 'disabled', timeout: 120000 });
+  }
+};
 
 const CHROME_ARGS = [
   '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
