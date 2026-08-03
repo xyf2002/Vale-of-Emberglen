@@ -30,8 +30,15 @@ const SETUP = (shot) => {
   }
 };
 
-const DIFF = (noPost) => {
+const DIFF = (noPost, box) => {
   const g = window.__game;
+  if (box) {
+    const sun = g.internals.game.get('sky').sunLight;
+    sun.shadow.camera.left = -box; sun.shadow.camera.right = box;
+    sun.shadow.camera.top = box; sun.shadow.camera.bottom = -box;
+    sun.shadow.camera.updateProjectionMatrix();
+    g.internals.game.get('sky').setTimeOfDay(g.internals.game.get('sky').timeOfDay);
+  }
   if (noPost) { const p = g.internals.game.get('post'); if (p) p.render = undefined; }
   const cv = document.querySelector('#app canvas');
   const W = cv.width, H = cv.height;
@@ -59,17 +66,36 @@ const DIFF = (noPost) => {
     img.data[i] = v; img.data[i + 1] = v; img.data[i + 2] = v; img.data[i + 3] = 255;
   }
   oc.putImageData(img, 0, 0);
-  return { meanAbs: +(sum / n).toFixed(3), max, png: out.toDataURL('image/png') };
+  // calibration: what the frame would look like with NO key at all. mean|B - keyoff|
+  // is the largest diff a 100%-shadowed frame could possibly produce, so
+  // meanAbs / potential = the effective fraction of the frame that is in shadow.
+  const sun = g.internals.game.get('sky').sunLight;
+  const keep = sun.intensity;
+  sun.intensity = 0;
+  g.render();
+  const C = grab().data;
+  sun.intensity = keep;
+  let s2 = 0, n2 = 0;
+  for (let i = 0; i < b.length; i += 4) for (let k = 0; k < 3; k++) { s2 += Math.abs(b[i + k] - C[i + k]); n2++; }
+  const potential = s2 / n2;
+  return {
+    meanAbs: +(sum / n).toFixed(3), max, potential: +potential.toFixed(2),
+    shadowedFraction: +((sum / n) / Math.max(1e-6, potential)).toFixed(4),
+    png: out.toDataURL('image/png'),
+  };
 };
 
+const BOXES = (process.env.BOXES ?? '0').split(',').map(Number);
 for (const shot of ['over', 'vista']) {
-  for (const noPost of [false, true]) {
-    await page.goto(`http://127.0.0.1:${port}/?capture=1&seed=20240719`, { waitUntil: 'load', timeout: 120000 });
-    await page.waitForFunction(() => window.__game?.ready === true, null, { timeout: 180000 });
-    await page.evaluate(`(${SETUP.toString()})(${JSON.stringify(shot)})`);
-    const r = await page.evaluate(`(${DIFF.toString()})(${noPost})`);
-    await writeFile(path.join(OUT, `diff_${shot}_${noPost ? 'nopost' : 'post'}.png`), Buffer.from(r.png.split(',')[1], 'base64'));
-    console.log(`${shot.padEnd(6)} post=${!noPost}  meanAbs=${r.meanAbs}  max=${r.max}`);
+  for (const box of BOXES) {
+    for (const noPost of [false, true]) {
+      await page.goto(`http://127.0.0.1:${port}/?capture=1&seed=20240719`, { waitUntil: 'load', timeout: 120000 });
+      await page.waitForFunction(() => window.__game?.ready === true, null, { timeout: 180000 });
+      await page.evaluate(`(${SETUP.toString()})(${JSON.stringify(shot)})`);
+      const r = await page.evaluate(`(${DIFF.toString()})(${noPost}, ${box})`);
+      await writeFile(path.join(OUT, `diff_${shot}_${box}_${noPost ? 'nopost' : 'post'}.png`), Buffer.from(r.png.split(',')[1], 'base64'));
+      console.log(`${shot.padEnd(6)} box=${String(box).padStart(4)} post=${!noPost}  meanAbs=${r.meanAbs}  max=${r.max}  keyOffPotential=${r.potential}  effShadowFrac=${r.shadowedFraction}`);
+    }
   }
 }
 await browser.close();

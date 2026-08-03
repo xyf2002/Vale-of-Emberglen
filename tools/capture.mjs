@@ -56,6 +56,16 @@ const FRAME_PROBE = () => {
   return { ok: std > 6 && uniq > 6, why: `std=${std.toFixed(1)} uniqueBands=${uniq} mean=${mean.toFixed(1)}`, std: +std.toFixed(2), mean: +mean.toFixed(1), bands: uniq };
 };
 
+/**
+ * Write the current canvas to disk. Every capture goes through here so a change to how
+ * frames are grabbed lands on shots and strips together.
+ *
+ * (This existed as an undefined `shot(page, file)` call for one commit, which made the
+ * whole harness throw "shot is not a function" on the first frame and report ok=false
+ * for the round. Restored as a real function.)
+ */
+const grabFrame = (page, file) => page.screenshot({ path: file, animations: 'disabled' });
+
 const CHROME_ARGS = [
   '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
   '--ignore-gpu-blocklist', '--disable-dev-shm-usage', '--js-flags=--max-old-space-size=4096',
@@ -109,7 +119,7 @@ async function main() {
       await page.evaluate(`(${shot.setup.toString()})(window.__game)`);
       await page.evaluate(() => window.__game.render());
       const file = path.join(outDir, `${shot.id}.png`);
-      await shot(page, file);
+      await grabFrame(page, file);
       const state = await page.evaluate(() => window.__game.state());
       const stats = await page.evaluate(() => window.__game.stats());
       const probe = await page.evaluate(`(${FRAME_PROBE.toString()})()`);
@@ -132,7 +142,7 @@ async function main() {
           if (strip.beforeFrame) await page.evaluate(`(${strip.beforeFrame.toString()})(window.__game, ${i})`);
           await page.evaluate(() => window.__game.render());
           const f = path.join(outDir, `${strip.id}_${String(i).padStart(2, '0')}.png`);
-          await shot(page, f);
+          await grabFrame(page, f);
           frames.push(path.relative(process.cwd(), f));
           descs.push(await page.evaluate(() => window.__game.state().ai?.described ?? null));
           if (i < strip.frames - 1) await page.evaluate(`(${strip.between.toString()})(window.__game)`);

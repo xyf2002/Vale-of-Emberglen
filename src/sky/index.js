@@ -416,22 +416,28 @@ const WEATHER = {
  * the image even after the shadow map itself was fixed -- the shadows existed, they
  * were just tucked underneath the things casting them.
  *
- * 46 deg / ^1.15 keeps the same silhouette but flattens the top and lifts the shoulders:
- *   0.29 -> 20, 0.34 -> 28, 0.45 -> 44, 0.50 -> 46 (noon), 0.60 -> 40, 0.63 -> 35,
- *   0.72 -> 17 (golden hour, the 18-25 deg band the reference plates sit in),
+ * 48 deg / ^1.0 keeps the same silhouette but flattens the top and lifts the shoulders:
+ *   0.29 -> 23, 0.34 -> 31, 0.45 -> 46, 0.50 -> 48 (noon), 0.60 -> 42, 0.63 -> 38,
+ *   0.72 -> 21 (golden hour, the 18-25 deg band the critique asked for),
  *   0.80 -> sunset, 0.86 -> ~-7 (civil twilight / blue hour), 0.0 -> -38 (true night).
- * Noon loses 19% of its illumination on flat ground and low morning GAINS 19%, which
- * moves the daylight ground/sky ratios toward the middle of the reference band rather
- * than out of either end of it.
+ *
+ * The lifted morning shoulder is load-bearing, not cosmetic. With the terrain casting
+ * shadow (see world/index.js) the over-shoulder shot's meadow sits behind a 138 m ridge
+ * 388 m up-sun, which subtends 18.4 degrees: at the old 16 deg morning key the ENTIRE
+ * valley floor was inside that ridge's shadow and no tree could rake anything across
+ * it. 23 degrees clears the ridge by a comfortable margin and hands the meadow its key
+ * back. Noon loses 15% of its illumination on flat ground, low morning gains 22%, which
+ * pulls the daylight ground/sky ratios toward the middle of the reference band instead
+ * of out of either end of it.
  */
 const RISE_T = 0.205;
 const SET_T = 0.805;
 const DAY_HALF = (SET_T - RISE_T) * 0.5;      // 0.30
 const DAY_MID = (SET_T + RISE_T) * 0.5;       // 0.505
 const NIGHT_HALF = 0.5 - DAY_HALF;            // 0.20
-const MAX_ELEV = 46 * Math.PI / 180;
+const MAX_ELEV = 48 * Math.PI / 180;
 const MIN_ELEV = -38 * Math.PI / 180;
-const DAY_SHAPE = 1.15;
+const DAY_SHAPE = 0.9;
 
 /**
  * How far back the key light is parked from the shadow focus point. It has to clear
@@ -626,6 +632,9 @@ export function createSky() {
     // never let it go fully monochromatic-red; keep a little life in the shadows' fill
     sr = lerp(1.0, sr, 0.95); sg = lerp(1.0, sg, 0.97); sb = lerp(1.0, sb, 0.99);
     // a touch of warmth even at noon, the way a graded game frame reads
+    // (measured: pushing this to 0.05/0.17 over a wider band moves the captured
+    // saturation by 0.001 — the post grade's own saturation curve absorbs it, so
+    // there is nothing to win here and it is left at the calibrated value)
     const warm = 1 - smoothstep(0.15, 0.75, y);
     sr = Math.min(1.0, sr * (1 + warm * 0.04));
     sb *= 1 - warm * 0.06;
@@ -639,11 +648,32 @@ export function createSky() {
 
     // ---- intensities ----
     const sunUp = smoothstep(-0.02, 0.06, y);
-    // Calibrated against the ACES grade at exposure 1.0: 2.15 puts lit grass
-    // (albedo ~0.39 linear) at ~1.0 linear — just under the clip shoulder, which
-    // is where the reference plates sit. 3.55 used to pin it to ~1.6 linear and
-    // blow a third of the frame.
-    const dayKey = 2.15 * Math.pow(clamp01(y * 3.0), 0.92);
+    // ------------------------------------------------------------------
+    // THE KEY / FILL RATIO IS THE CEILING ON WHAT SHADOW CAN DO.
+    //
+    // A shadow can only ever remove the KEY's contribution. Measured on the
+    // near-field meadow of the over-shoulder shot at a 23 deg morning key, with the
+    // fill lights zeroed and then the key zeroed in turn:
+    //
+    //     full lighting      86.7 / 255
+    //     key removed        63.4      -> the key is worth 27% of the image
+    //     fill removed       36.6      -> the fill is worth 58% of it
+    //
+    // The unshadowed fill was out-contributing the shadow-casting key by roughly two
+    // to one on the ground, so even a perfect, geometrically flawless, pitch-black
+    // shadow could take at most a quarter of the meadow's luminance away. That is the
+    // real reason `renderer.shadowMap.enabled = false` moved the mean pixel by 0.36:
+    // there was almost nothing there for shadow to remove. Every other finding in this
+    // round -- the frustum, the sun azimuth, the terrain not casting -- sat downstream
+    // of this one.
+    //
+    // The key goes up and the hemisphere fill comes down by matching amounts (see
+    // hemi.intensity below), so LIT ground lands at the same luminance it did before
+    // (which is what the ground/sky ratio guardrail measures) while SHADOWED ground
+    // falls much further. 2.60 at the new 48 deg noon peak puts lit grass at the same
+    // ~1.9 linear the old 2.15-at-63-deg did, so the clip guardrail is undisturbed.
+    // ------------------------------------------------------------------
+    const dayKey = 3.05 * Math.pow(clamp01(y * 3.0), 0.92);
     const twilightKey = 1.0 * (1 - moonBlend) * (1 - sunUp);
     const moonKey = 0.42 * moonBlend;
     sun.intensity = (dayKey * sunUp + twilightKey + moonKey) * wx.sunMul;
@@ -672,10 +702,13 @@ export function createSky() {
     sun.shadow.intensity = 0.20 + 0.80 * smoothstep(0.02, 0.16, y);
 
     // Hemisphere fill — reference #9 wants real shadow structure, so the ambient
-    // must stay well below the key. ~0.6 day keeps open shadows readable (~45/255
-    // on meadow grass) while contact/under-tree shadows still fall dark; the 0.33
-    // from r01 crushed open shadows into a flat blue-grey. Twilight bump keeps
-    // dusk lit after the key drops.
+    // must stay well below the key. The pendulum has now swung both ways: 0.33 in r01
+    // crushed open shadows into a flat blue-grey, and the 0.51 it was raised to in
+    // response put the fill at roughly twice the key on flat ground, at which point
+    // shadow stopped being able to change the image at all (see dayKey above). The
+    // DAYLIGHT term is what was too big, so that is what comes down; the base term,
+    // which is all that is left at dusk and through the night, is untouched, and the
+    // dusk shot's mean luminance guardrail with it.
     const skyLum = Math.max(0.02, zc[0] * 0.2126 + zc[1] * 0.7152 + zc[2] * 0.0722);
     hemi.color.copy(ambientColor);
     hemi.groundColor.setRGB(
@@ -684,11 +717,11 @@ export function createSky() {
       lerp(0.12, 0.16, day) * 0.85,
       THREE.LinearSRGBColorSpace,
     );
-    hemi.intensity = (0.28 + 0.44 * Math.pow(clamp01(skyLum * 1.8), 0.9)) * wx.ambMul;
+    hemi.intensity = (lerp(0.30, 0.16, clamp01(y * 2.2)) + 0.22 * Math.pow(clamp01(skyLum * 1.8), 0.9)) * wx.ambMul;
 
     // a very low cool fill so night silhouettes never crush to pure black
     fill.color.copy(zenithColor);
-    fill.intensity = 0.16 + 0.55 * nightAmt;
+    fill.intensity = 0.09 + 0.62 * nightAmt;
 
     // ------------------------------------------------------------------
     // fog
@@ -808,7 +841,13 @@ export function createSky() {
       // ---- key light ----
       sun = new THREE.DirectionalLight(0xffffff, 3);
       sun.castShadow = true;
-      const m = c.quality.shadowMapSize;
+      // The frustum below is 3.9x wider than it used to be. At the quality tier's own
+      // map size that would put a shadow texel at 13.7 cm of ground -- wider than a
+      // bush's contact shadow -- and the point of widening the frustum was to stop
+      // losing shadows, not to trade the near-field ones away for far-field ones.
+      // Doubling holds the texel near where it was, at 6.8 cm. The shadow pass is
+      // depth-only, so this costs fill rate and not a single extra triangle.
+      const m = Math.min(4096, c.quality.shadowMapSize * 2);
       // ------------------------------------------------------------------
       // THE SHADOW FRUSTUM WAS TOO SMALL AND TOO CLOSE.
       //

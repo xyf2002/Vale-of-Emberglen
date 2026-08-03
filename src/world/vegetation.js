@@ -239,6 +239,26 @@ export function createGrass(ctx, T) {
     mesh.count = 0;
     mesh.frustumCulled = false;
     mesh.receiveShadow = true;
+    // ------------------------------------------------------------------
+    // THE CARPET STILL DOES NOT CAST, AND THAT IS A MEASURED DECISION.
+    //
+    // The blind critique blamed "grass looks painted past ten metres" on missing
+    // shadow, so this was tried: castShadow on the three near bands, at 2048 and at
+    // 4096 shadow map. Measured on the wip-shadow round, against the identical build
+    // with it off:
+    //
+    //   shadows-on/off pixel diff  1.564 -> 1.699   (noise)
+    //   local contrast `edge`      4.75  -> 4.76 (over-shoulder), 5.51 -> 5.51 (vista)
+    //   saturation, ratio, colours  identical to three decimal places
+    //   triangles                  +200k on every shot, pushing past the budget
+    //
+    // A blade is 1.5-5 cm wide and a shadow texel is 6.8 cm at the current frustum, so
+    // the depth map cannot resolve a blade at all; what it produces is sub-texel
+    // speckle that the PCF filter then averages back to "lit". Grass self-shadowing
+    // needs a technique that does not go through a depth map (screen-space, or the
+    // baked root-to-tip occlusion ramp already applied in color_fragment below).
+    // Leave it off rather than pay 200k triangles for a null result.
+    // ------------------------------------------------------------------
     mesh.castShadow = false;
     mesh.matrixAutoUpdate = false;
     group.add(mesh);
