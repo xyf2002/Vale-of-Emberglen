@@ -134,8 +134,17 @@ export const SHOTS = [
  * longer lens, and samples fast enough to resolve the behaviour it claims to test.
  */
 
-/** camera helper shared by the strips: hold the subject creature at readable scale */
-const TRACK = (g, opts) => {
+/**
+ * Camera helper shared by the strips: hold the subject creature at readable scale.
+ *
+ * capture.mjs ships `beforeFrame` into the browser with `.toString()`, so a beforeFrame
+ * that CALLS a module-scope helper throws `TRACK is not defined` inside the page and
+ * every strip in the round dies. (It did: round 9 captured 6 shots and 0 strips.) The
+ * body therefore lives in a string and each beforeFrame is compiled from it with the
+ * options already baked in, so `.toString()` is self-contained. Framing, standoff,
+ * height, lens and subject-choice are byte-for-byte the values they always were.
+ */
+const TRACK_BODY = `
   const s = g.state();
   const p = s.player.pos;
   const list = (s.creatures && s.creatures.sample) || [];
@@ -154,7 +163,8 @@ const TRACK = (g, opts) => {
   const ex = cx + (dx / len) * -back + (dz / len) * opts.side;
   const ez = cz + (dz / len) * -back - (dx / len) * opts.side;
   g.setCamera([ex, g.groundAt(ex, ez) + opts.height, ez], [cx, gy + 0.42, cz], opts.fov);
-};
+`;
+const TRACK = (opts) => new Function('g', 'i', `const opts = ${JSON.stringify(opts)};\n${TRACK_BODY}`);
 
 export const STRIPS = [
   {
@@ -165,7 +175,7 @@ export const STRIPS = [
     // The capture harness now reloads the page before each strip, so no earlier shot's
     // taming can leak in and make an "interaction-free" window contain a tamed companion.
     setup: (g) => { g.setTimeOfDay(0.35); g.setCamera(null); g.run(1.5); },
-    beforeFrame: (g) => TRACK(g, { dist: 4.6, side: 2.2, height: 0.95, fov: 44 }),
+    beforeFrame: TRACK({ dist: 4.6, side: 2.2, height: 0.95, fov: 44 }),
     between: (g) => g.run(1.8),
   },
   {
@@ -174,7 +184,7 @@ export const STRIPS = [
     intent: 'The Palworld first-contact beat: notice, assess, react. Rubric criteria 5, 8 and 11.',
     frames: 8,
     setup: (g) => { g.setTimeOfDay(0.4); g.setCamera(null); g.run(0.5); g.hold('forward', true); },
-    beforeFrame: (g) => TRACK(g, { dist: 5.2, side: 2.6, height: 1.05, fov: 46 }),
+    beforeFrame: TRACK({ dist: 5.2, side: 2.6, height: 1.05, fov: 46 }),
     between: (g) => g.run(0.7),
     teardown: (g) => g.hold('forward', false),
   },
@@ -184,7 +194,7 @@ export const STRIPS = [
     intent: 'Rubric criterion 8: starts and stops must be events with a 0.2-0.4s lean-before-translate ramp, not switches. Coarser sampling cannot show this.',
     frames: 8,
     setup: (g) => { g.setTimeOfDay(0.45); g.setCamera(null); g.run(2.0); g.hold('sprint', true); g.hold('forward', true); },
-    beforeFrame: (g) => TRACK(g, { dist: 4.0, side: 1.8, height: 0.8, fov: 42 }),
+    beforeFrame: TRACK({ dist: 4.0, side: 1.8, height: 0.8, fov: 42 }),
     between: (g) => g.run(0.25),
     teardown: (g) => { g.hold('forward', false); g.hold('sprint', false); },
   },

@@ -20,7 +20,7 @@ const KEYS = [
   'bodyY', 'hipsPitch', 'hipsYaw', 'hipsRoll', 'hipsSY',
   'spinePitch', 'spineYaw', 'spineRoll', 'spineSY',
   'headPitch', 'headYaw', 'headRoll',
-  'earPitch', 'earSpread', 'earTip',
+  'earPitch', 'earSpread', 'earTip', 'earAsym',
   'armLPitch', 'armRPitch', 'armSpread', 'armLYaw', 'armRYaw',
   'legLPitch', 'legRPitch', 'legSpread',
   'tailPitch', 'tailYaw', 'tailCurl',

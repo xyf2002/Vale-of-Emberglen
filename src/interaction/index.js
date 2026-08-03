@@ -45,7 +45,7 @@ export function createInteraction() {
   let fx, resources, taming, offering, companion;
 
   const inventory = { berry: 6, wood: 0, stone: 0 };
-  let focus = null, prompt = null;
+  let focus = null, prompt = null, marked = null;
   let gathering = null;
   let handFeed = null;     // { cr, t }
   let offerHold = 0;
@@ -57,7 +57,11 @@ export function createInteraction() {
 
   const HAND_RANGE = 2.9;
   const TOSS_RANGE = 11;
-  const HAND_TRUST = 0.33;
+  const HAND_TRUST = 0.34;    // exactly the "curious" gate: once it is curious, it will come to your hand
+  const OFFER_RANGE = 14;     // beyond this there is nobody to offer to and the key is not advertised
+  const PROMPT_RANGE = 12.5;  // where the full card with a keycap lives
+  const MARK_RANGE = 90;      // where the dimmed "you left this one half-tamed" marker lives
+  let taughtBerries = false;  // one-time signpost when the satchel runs dry
 
   function note(text, kind = 'info') {
     log.push(text);
@@ -69,6 +73,15 @@ export function createInteraction() {
   function setInventory(item, delta) {
     inventory[item] = (inventory[item] ?? 0) + delta;
     ctx.bus.emit('inventory:change', { ...inventory });
+    // The loop must never dead-end silently. The first time the satchel runs dry, say
+    // once, plainly, where more come from.
+    if (item === 'berry' && inventory.berry <= 0 && !taughtBerries) {
+      taughtBerries = true;
+      const bush = nearestBush(player?.position ?? tmp);
+      note(bush
+        ? `Berries gone. Bushes regrow — nearest is ${Math.round(bush.d)}m ${bush.dir}.`
+        : 'Berries gone. Berry bushes regrow — press E at one.');
+    }
   }
 
   const api = {
@@ -77,6 +90,10 @@ export function createInteraction() {
     inventory,
     get focus() { return focus; },
     get prompt() { return prompt; },
+    /** the half-tamed creature the UI should keep a dim marker on, or null */
+    get marked() { return marked; },
+    /** {stage,name,trust,need,within,settling} for any creature — the UI's single source */
+    readout(cr) { return cr ? taming?.readout?.(cr) ?? null : null; },
     get companions() { return companion?.members ?? []; },
     get arc() { return taming?.arc ?? []; },
 
@@ -138,22 +155,38 @@ export function createInteraction() {
       // creatures that reached food on the ground
       for (const f of offering.food) {
         if (f.dead || !f.landed) continue;
+        // A berry you left and nobody wanted is not gone. Walk over it and it is yours
+        // again — the taming currency can never be permanently thrown away.
+        // (only after it has lain there a while, or a berry set down at your own feet
+        //  would be swallowed back into the satchel on the next frame)
+        if (!f.claimedBy && f.t > 6 && f.position.distanceTo(pp) < 1.15) {
+          offering.kill(f);
+          setInventory('berry', 1);
+          fx.count(tmp.copy(f.position).setY(f.position.y + 0.6), '+1', '#ffb0c2');
+          note('You pick the berry back up.');
+          continue;
+        }
         if (!f.claimedBy) {
-          // offer it to the most trusting noticed creature in range
+          // Offer it to the creature it was meant for, if that one is free; otherwise to
+          // the nearest noticed creature that has finished its last meal.
           let cand = null, cd = 9;
-          for (const cr of creatures?.list ?? []) {
-            if (cr.tamed) continue;
-            const st = taming.stateOf(cr);
-            if (!st.noticed) continue;
-            const d = cr.position.distanceTo(f.position);
-            if (d < cd) { cd = d; cand = cr; }
+          const free = (cr) => {
+            const s = taming.stateOf(cr);
+            return s.noticed && s.fedCd <= 0 && s.act !== 'flee' && s.act !== 'eat' && s.act !== 'handEat';
+          };
+          if (f.intended && !f.intended.tamed && free(f.intended)
+              && f.intended.position.distanceTo(f.position) < 14) {
+            cand = f.intended;
+          } else {
+            for (const cr of creatures?.list ?? []) {
+              if (cr.tamed || !free(cr)) continue;
+              const d = cr.position.distanceTo(f.position);
+              if (d < cd) { cd = d; cand = cr; }
+            }
           }
           if (cand) {
-            const cst = taming.stateOf(cand);
-            if (cst.act !== 'flee' && cst.act !== 'eat' && cst.act !== 'handEat') {
-              f.claimedBy = cand;
-              taming.claimFood(cand, f);
-            }
+            f.claimedBy = cand;
+            taming.claimFood(cand, f);
           }
         } else {
           const cr = f.claimedBy;
@@ -202,7 +235,23 @@ export function createInteraction() {
       let crFocus = null, crDist = Infinity;
       if (primary && !primary.tamed) {
         crDist = primary.position.distanceTo(pp);
-        if (crDist < 12.5 && taming.stateOf(primary).noticed) crFocus = primary;
+        if (crDist < PROMPT_RANGE && taming.stateOf(primary).noticed) crFocus = primary;
+      }
+
+      // ---- the one you left half-tamed ------------------------------------
+      // Losing the card the moment a creature drifts past 12.5m is how a player walks
+      // away from a nearly-finished tame without knowing it. Keep a quiet world-anchored
+      // marker on the best unfinished creature so there is always somewhere to walk back to.
+      marked = null;
+      let markScore = -Infinity;
+      for (const cr of creatures?.list ?? []) {
+        if (!cr?.position || cr.tamed || cr === crFocus) continue;
+        const st = taming.stateOf(cr);
+        if (!st.noticed || (st.stage < 2 && st.trust < 0.14)) continue;
+        const d = cr.position.distanceTo(pp);
+        if (d > MARK_RANGE) continue;
+        const score = st.trust * 100 - d * 0.5;
+        if (score > markScore) { markScore = score; marked = cr; }
       }
 
       let next = null;
@@ -261,15 +310,25 @@ export function createInteraction() {
     snapshot() {
       const f = focus;
       const st = f && !f.kind ? taming.stateOf(f) : null;
+      const r = f && !f.kind ? taming.readout(f) : null;
+      const mr = marked ? taming.readout(marked) : null;
       return {
         inventory: { ...inventory },
         focus: f
           ? (f.kind
             ? { kind: f.kind, node: f.id, ready: f.ready }
-            : { id: f.id, species: f.species, trust: +(st?.trust ?? f.trust ?? 0).toFixed(2), stage: STAGES[st?.stage ?? 0] })
+            : {
+              id: f.id, species: f.species, trust: +(st?.trust ?? f.trust ?? 0).toFixed(2),
+              stage: STAGES[st?.stage ?? 0], berriesToGo: r?.need ?? null,
+            })
+          : null,
+        marked: marked
+          ? { species: marked.species, stage: mr.name, berriesToGo: mr.need,
+            dist: +marked.position.distanceTo(player.position).toFixed(1) }
           : null,
         prompt: prompt?.text ?? null,
         stage: st ? STAGES[st.stage] : null,
+        berriesToGo: r?.need ?? null,
         companions: companion?.snapshot?.() ?? [],
         tamed: companion?.members?.length ?? 0,
         resources: resources?.snapshot?.() ?? null,
@@ -294,50 +353,79 @@ export function createInteraction() {
     return { node: best, d: Math.sqrt(bd), dir: COMPASS[oct] };
   }
 
+  /**
+   * PROMPT COPY, THE ONE RULE: the line under a creature's name must always name the
+   * REMAINING COST, and the keycap is only shown when pressing it does something good.
+   * "Too close — back off" while advertising [F], and then docking trust when the player
+   * presses the key you just showed them, is the worst beat in the game.
+   */
+  function costLine(need) {
+    if (need <= 1) return 'One more berry and it will follow you';
+    if (need === 2) return 'Two more berries and it will follow you';
+    return 'Three berries will win it over';
+  }
+
   function buildPrompt(f, crFocus, crDist) {
     if (handFeed) {
       const n = handFeed.cr.def?.name ?? 'it';
-      return { text: `Hold still — ${n} is deciding`, key: 'F' };
+      return { text: `Hold still — ${n} is deciding`, key: null };
     }
     if (f && f.kind) {
-      if (!f.ready) return { text: 'Picked clean', key: 'E' };
+      if (!f.ready) return { text: 'Picked clean — it will grow back', key: null };
       const label = f.kind === 'berry' ? 'Pick berries' : f.kind === 'wood' ? 'Gather sticks' : 'Take stone';
       return { text: label, key: 'E' };
     }
     if (!f) {
-      if (companion.members.length) return { text: 'Whistle', key: 'Q' };
+      if (companion.members.length) return { text: 'Whistle them over', key: 'Q' };
       return null;
     }
     // creature
     const cr = f;
     const st = taming.stateOf(cr);
+    const r = taming.readout(cr);
     const name = cr.def?.name ?? 'it';
-    if (cr.tamed) return { text: `${name} is with you`, key: 'Q' };
+    if (cr.tamed) return { text: `${name} travels with you`, key: 'Q' };
+
     if (inventory.berry <= 0) {
       const bush = nearestBush(player.position);
       return {
         text: bush
-          ? `${name} is watching — berries ${Math.round(bush.d)}m ${bush.dir}`
-          : `${name} is watching — you have nothing to offer`,
-        key: 'E',
+          ? `Out of berries — a bush is ${Math.round(bush.d)}m ${bush.dir}`
+          : 'Out of berries — bushes carry them',
+        key: null,
       };
     }
-    if (crDist <= HAND_RANGE) {
-      if (st.trust >= HAND_TRUST) {
-        const alt = st.trust >= 0.55 && st.petCd <= 0 ? 'E to pet' : null;
-        return { text: `Offer the berry to ${name}`, key: 'F', alt };
-      }
-      return { text: `Too close — back off and toss a berry`, key: 'F' };
+    if (crDist > OFFER_RANGE) return { text: 'Too far to offer — get closer', key: null };
+
+    const line = costLine(r.need);
+    if (crDist <= HAND_RANGE && st.trust >= HAND_TRUST) {
+      const alt = st.trust >= 0.67 && st.petCd <= 0 ? 'E to pet' : null;
+      return { text: r.need <= 1 ? line : 'Hold the berry out', key: 'F', alt, cost: line };
     }
-    if (crDist <= TOSS_RANGE) return { text: `Toss a berry to ${name}`, key: 'F' };
-    return { text: `${name} is keeping its distance`, key: 'F' };
+    // Close but not trusted yet: you set it down and give it room. No flinch, no penalty —
+    // the same verb, just performed politely.
+    if (crDist <= HAND_RANGE) return { text: 'Set a berry down and give it room', key: 'F', cost: line };
+    if (crDist <= TOSS_RANGE) return { text: r.need <= 1 ? line : 'Toss it a berry', key: 'F', cost: line };
+    return { text: 'Toss it a berry', key: 'F', cost: line };
   }
 
   function doOffer(c, pp, crFocus, crDist) {
     if (handFeed) return;
     if (inventory.berry <= 0) {
-      note('No berries left. Bushes carry them.');
+      const bush = nearestBush(pp);
+      note(bush
+        ? `No berries left — a bush is ${Math.round(bush.d)}m ${bush.dir}. Press E at it.`
+        : 'No berries left. Berry bushes grow back — press E at one.');
       c.bus.emit('taming:offer', { creature: crFocus, mode: 'empty' });
+      return;
+    }
+
+    // RANGE GATE. Berries are the taming currency and there is no reason on earth to let
+    // a player spend one into empty grass 100m from anything. Refuse, and say why.
+    const target0 = crFocus ?? creatures?.nearest?.(pp, OFFER_RANGE, (cr) => !cr.tamed) ?? null;
+    if (!target0) {
+      note('Nothing close enough to offer a berry to.');
+      c.bus.emit('taming:offer', { creature: null, mode: 'nobody' });
       return;
     }
 
@@ -353,42 +441,35 @@ export function createInteraction() {
         taming.emote(crFocus, 'question', 1.0);
         c.bus.emit('taming:offer', { creature: crFocus, mode: 'hand' });
         note(`You hold out a berry to ${crFocus.def?.name ?? 'it'}.`);
-      } else {
-        taming.onSpookedByOffer(crFocus);
-        note(`${crFocus.def?.name ?? 'It'} flinches — it does not trust your hand yet.`);
+        return;
       }
-      return;
+      // Not trusted enough for a hand yet — so put it on the ground instead of reaching in.
+      // Falls through to the toss below, which lands it a step away from its feet.
     }
 
     // throw one down where it can reach it without coming to you
-    let target = crFocus;
-    if (!target) {
-      target = creatures?.nearest?.(pp, TOSS_RANGE + 3, (cr) => !cr.tamed) ?? null;
-    }
+    const target = target0;
     setInventory('berry', -1);
     offerHold = 0.9;
     offering.setOffering(true);
 
     offering.handPoint(tmp);
-    if (target) {
-      tmp2.copy(pp).sub(target.position).setY(0);
-      const d = tmp2.length() || 1;
-      tmp2.normalize().multiplyScalar(Math.min(1.5, d * 0.34));
-      tmp2.add(target.position);
-      tmp2.y = (world?.heightAt?.(tmp2.x, tmp2.z) ?? target.position.y);
-      const st = taming.stateOf(target);
-      if (!st.noticed) { st.noticed = true; taming.emote(target, 'question', 1.4); }
-      taming.emote(target, 'question', 1.2);
-      c.bus.emit('taming:offer', { creature: target, mode: 'toss' });
-      note(`You toss a berry toward ${target.def?.name ?? 'it'}.`);
-    } else {
-      const fwd = player.getForward?.() ?? tmp2.set(0, 0, -1);
-      tmp2.copy(pp).addScaledVector(fwd, 3.4);
-      tmp2.y = world?.heightAt?.(tmp2.x, tmp2.z) ?? pp.y;
-      c.bus.emit('taming:offer', { creature: null, mode: 'toss' });
-      note('You set a berry down in the grass.');
-    }
-    offering.toss(tmp, tmp2);
+    tmp2.copy(pp).sub(target.position).setY(0);
+    const d = tmp2.length() || 1;
+    tmp2.normalize().multiplyScalar(Math.min(1.5, d * 0.34));
+    tmp2.add(target.position);
+    tmp2.y = (world?.heightAt?.(tmp2.x, tmp2.z) ?? target.position.y);
+    const st = taming.stateOf(target);
+    if (!st.noticed) { st.noticed = true; taming.emote(target, 'question', 1.4); }
+    taming.emote(target, 'question', 1.2);
+    c.bus.emit('taming:offer', { creature: target, mode: 'toss' });
+    const tName = target.def?.name ?? 'it';
+    const left = taming.readout(target).need;
+    note(st.fedCd > 0.4
+      ? `You leave a berry for ${tName} — it is still eating the last one.`
+      : `You toss a berry toward ${tName}. ${left <= 1 ? 'This one seals it.' : ''}`.trim());
+    const f = offering.toss(tmp, tmp2);
+    if (f) f.intended = target;
   }
 
   return api;

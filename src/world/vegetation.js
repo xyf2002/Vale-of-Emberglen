@@ -613,13 +613,34 @@ export function createTrees(ctx, T, rng) {
 
 /* ============================================================== BUSHES ========= */
 
+// ---------------------------------------------------------------------------
+// THE BLACK BLOB.
+//
+// A shrub near the lens rendered as a hard-edged, fully opaque near-black polygon in
+// creature_portrait -- the first thing a critic's eye went to, read as a broken shadow
+// decal or a hole in the terrain. It was neither: it was a bush whose albedo was about
+// seven times too dark.
+//
+// Cause: `new THREE.Color(hex)` is ALREADY linear (ColorManagement is on, and paint()
+// documents exactly this), so the extra .convertSRGBToLinear() applied the sRGB
+// transfer function a second time. 0x577f38 -> linear 0.089/0.213/0.038 -> 0.008/0.037/
+// 0.003. Any bush the key light did not hit square-on therefore fell to pure ambient on
+// a near-zero albedo, i.e. black. Verified by rendering the bushes with an UNLIT
+// MeshBasicMaterial and watching them stay black: it was never a lighting or shadow bug.
+//
+// These are authored directly in LINEAR working space at the value a shrub actually has
+// -- close to the meadow's own albedo, one notch deeper and greener, so shrubs read as
+// clumps of the same vegetation rather than as holes punched in the frame. Reference #9:
+// a shadow is "a cooler, less saturated version of the lit colour, never black".
+const BUSH_PAL = [0x596b3d, 0x64723f, 0x4d603a, 0x5f6a45];
+
 export function createBushes(ctx, T, rng) {
   const noise = ctx.noise;
   const variants = [];
   for (let v = 0; v < 3; v++) {
     const parts = [];
     const n = 2 + (v % 3);
-    const base = new THREE.Color(LEAF[v % LEAF.length]).convertSRGBToLinear();
+    const base = new THREE.Color(BUSH_PAL[v % BUSH_PAL.length]);
     for (let i = 0; i < n; i++) {
       const r = rng.range(0.42, 0.72);
       const g = lobe(rng, noise, r, 1.15, 0.8, 0);
@@ -627,7 +648,7 @@ export function createBushes(ctx, T, rng) {
       const p = g.attributes.position, nr = g.attributes.normal;
       const arr = new Float32Array(p.count * 3);
       for (let k = 0; k < p.count; k++) {
-        const val = 0.60 + 0.50 * clamp(nr.getY(k) * 0.5 + 0.5, 0, 1) + 0.14 * noise.fbm(p.getX(k) * 2, p.getZ(k) * 2, 2);
+        const val = 0.72 + 0.38 * clamp(nr.getY(k) * 0.5 + 0.5, 0, 1) + 0.14 * noise.fbm(p.getX(k) * 2, p.getZ(k) * 2, 2);
         arr[k * 3] = base.r * val; arr[k * 3 + 1] = base.g * val; arr[k * 3 + 2] = base.b * val;
       }
       g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
@@ -635,7 +656,11 @@ export function createBushes(ctx, T, rng) {
     }
     variants.push(mergeGeos(parts));
   }
-  const mat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+  const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  // a shrub is a scattering volume, not an opaque shell — a wider wrap than the tree
+  // canopies get, so its shaded side keeps its hue instead of falling off a cliff
+  mat.onBeforeCompile = (sh) => applyFoliageWrap(sh, 0.62);
+  mat.customProgramCacheKey = () => 'foliagewrap62';
   const q = clamp(ctx.quality.grassDensity ?? 1, 0.3, 1.5);
   const lists = variants.map(() => []);
   const target = Math.round(300 * q);

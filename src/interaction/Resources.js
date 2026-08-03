@@ -9,7 +9,8 @@ import * as THREE from 'three';
  */
 
 const KINDS = {
-  berry: { label: 'berries', item: 'berry', yieldMin: 2, yieldMax: 4, channel: 0.42, regrow: 55, color: 0xd93a5c, reach: 2.6 },
+  // berries are the taming currency, so they regrow fastest — the loop must never stall
+  berry: { label: 'berries', item: 'berry', yieldMin: 3, yieldMax: 4, channel: 0.42, regrow: 40, color: 0xd93a5c, reach: 2.6 },
   wood: { label: 'sticks', item: 'wood', yieldMin: 2, yieldMax: 3, channel: 0.5, regrow: 70, color: 0x8a6438, reach: 2.4 },
   stone: { label: 'stone', item: 'stone', yieldMin: 1, yieldMax: 2, channel: 0.62, regrow: 90, color: 0x9aa39a, reach: 2.4 },
 };

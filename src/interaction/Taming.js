@@ -15,13 +15,30 @@ import * as THREE from 'three';
  * Trust is not monotonic. Standing still near a creature earns it; charging or sprinting
  * inside its comfort ring burns it and can knock a stage back off. That is the whole
  * point — trust you cannot lose is not trust.
+ *
+ * THE COST IS COUNTABLE. The three gaps between "noticed" and "bonded" are equal, and a
+ * berry is worth exactly one of them. Patience walks the trust bar up to the brink of the
+ * next gate and stops dead there; only food crosses. So the arc is always, honestly,
+ * THREE BERRIES — which is a sentence the HUD can print and a player can plan around.
+ * A creature also has to finish and settle after a meal before it will take the next one
+ * (`fedCd`), which is what stops three berries in three seconds from being a companion.
  */
 
 export const STAGES = ['wild', 'noticed', 'curious', 'trusting', 'bonded'];
-export const STAGE_AT = [0, 0.001, 0.25, 0.55, 1.0];
+export const STAGE_AT = [0, 0.001, 0.34, 0.67, 1.0];
+
+/** berries still standing between this stage and a companion — the number the HUD prints */
+export function berriesToGo(stage) { return Math.max(0, 4 - Math.max(1, stage | 0)); }
+
+/** patience walks you to here and no further; a berry is the only thing that crosses */
+export function patienceCap(stage) {
+  return Math.max(0, STAGE_AT[Math.min((stage | 0) + 1, STAGE_AT.length - 1)] - 0.02);
+}
 
 const ENGAGE_RANGE = 20;
 const NOTICE_RANGE = 13;
+/** seconds a creature spends chewing and settling before it will take another berry */
+const FED_COOLDOWN = 12;
 
 export function createTaming(ctx, { creatures, player, fx, bus }) {
   const rng = ctx.rng.fork(0x7a3ed);
@@ -46,6 +63,8 @@ export function createTaming(ctx, { creatures, player, fx, bus }) {
         approachCd: rng.range(0.5, 2.5),
         gaugeT: 0,
         peak: 0,
+        fedCd: 0,        // still chewing / settling: will not take another berry yet
+        fed: 0,          // berries accepted, 0..3
       };
     }
     return cr._tame;
@@ -111,6 +130,17 @@ export function createTaming(ctx, { creatures, player, fx, bus }) {
     return st.trust - before;
   }
 
+  /**
+   * A berry is worth exactly one gate. Never more, never less — so "one more berry and it
+   * will follow you" is a promise the system keeps rather than an estimate.
+   */
+  function advance(cr, reason) {
+    const st = stateOf(cr);
+    const target = STAGE_AT[Math.min(st.stage + 1, STAGE_AT.length - 1)];
+    st.fed = Math.min(3, st.fed + 1);
+    return addTrust(cr, Math.max(target - st.trust, 0.02), reason);
+  }
+
   const api = {
     arc,
     stateOf,
@@ -118,6 +148,24 @@ export function createTaming(ctx, { creatures, player, fx, bus }) {
     stageFor,
     addTrust,
     emote,
+    berriesToGo,
+    patienceCap,
+    /** everything the HUD needs to say "you are winning, and here is what it costs" */
+    readout(cr) {
+      const st = stateOf(cr);
+      const stage = cr?.tamed ? 4 : st.stage;
+      const cap = patienceCap(stage);
+      const floor = STAGE_AT[stage] || 0;
+      return {
+        stage,
+        name: STAGES[stage],
+        trust: st.trust,
+        need: cr?.tamed ? 0 : berriesToGo(stage),
+        settling: st.fedCd > 0.4,
+        /** 0..1 within the current gate — the ring is this, not raw trust */
+        within: cap > floor ? Math.min(1, Math.max(0, (st.trust - floor) / (cap - floor))) : 1,
+      };
+    },
     /** the creature the arc is currently "about" */
     primary: null,
 
@@ -150,7 +198,11 @@ export function createTaming(ctx, { creatures, player, fx, bus }) {
 
         if (cr.tamed) { st.engaged = false; continue; }
 
-        if (d > ENGAGE_RANGE && !st.food) {
+        // A creature you have fed is invested in you: it stays engaged much further out,
+        // so it drifts after you rather than reverting to scenery the moment you jog off.
+        // That is what makes the HUD's distant marker a place worth walking back to.
+        const engageR = ENGAGE_RANGE + (st.stage >= 2 ? 24 : 0);
+        if (d > engageR && !st.food) {
           if (st.engaged) { st.engaged = false; st.act = 'idle'; }
           continue;
         }
@@ -169,10 +221,19 @@ export function createTaming(ctx, { creatures, player, fx, bus }) {
         const comfort = comfortOf(cr, st);
         const inside = d < comfort;
 
+        // Digestion. Standing quietly nearby while it eats makes it settle faster — the
+        // wait is not dead time, it is the same verb (be calm, be close) as everything else.
+        if (st.fedCd > 0) {
+          const calmNear = d < comfort * 2.4 && pSpeed < 1.6;
+          st.fedCd = Math.max(0, st.fedCd - dt * (calmNear ? 1.7 : 1));
+        }
+
         // ---- trust drift -------------------------------------------------
         if (st.act !== 'eat' && st.act !== 'handEat') {
-          if (inside && pSpeed > 6.0) {
-            // sprinting into its space: it bolts and you lose real ground
+          if (inside && pSpeed > 6.0 && closing > 0.5) {
+            // Sprinting INTO its space: it bolts and you lose real ground. Sprinting away
+            // is not a threat and must not be punished — docking trust for leaving is
+            // exactly the kind of unsignposted penalty that teaches players to stop moving.
             if (st.spookCd <= 0) {
               st.spookCd = 1.6;
               const lost = -0.16 - st.trust * 0.2;
@@ -189,8 +250,10 @@ export function createTaming(ctx, { creatures, player, fx, bus }) {
             if (st.act !== 'flee' && st.act !== 'toFood') { st.act = 'shy'; st.actT = 0.5; }
             if (st.spookCd <= 0) { st.spookCd = 2.4; emote(cr, 'alert', 1.0); }
           } else if (st.noticed && d < comfort * 2.1 && pSpeed < 1.2) {
-            // patience is the mechanic: hold still and it settles
-            addTrust(cr, 0.055 * dt, 'patient');
+            // patience is the mechanic: hold still and it settles — but only up to the
+            // brink of the next gate. Standing in a field can never make a friend.
+            const cap = patienceCap(st.stage);
+            if (st.trust < cap) addTrust(cr, Math.min(0.05 * dt, cap - st.trust), 'patient');
             if (st.act === 'flee' || st.act === 'shy') { st.act = 'watch'; st.actT = 0; }
             if (st.emoteCd <= 0 && rng.next() < dt * 0.35) emote(cr, st.trust > 0.5 ? 'note' : 'question', 1.3);
           }
@@ -216,10 +279,11 @@ export function createTaming(ctx, { creatures, player, fx, bus }) {
     /** hand-feed / toss resolution is driven from index.js; these are the outcomes */
     onEatFromGround(cr, food) {
       const st = stateOf(cr);
-      st.act = 'eat'; st.actT = 1.5; st.food = null;
+      st.act = 'eat'; st.actT = 2.2; st.food = null;
+      st.fedCd = FED_COOLDOWN;
       cr.playAnim?.('eat');
       cr.mood = 'eating';
-      const gained = addTrust(cr, 0.19, 'ate-thrown');
+      const gained = advance(cr, 'ate-thrown');
       fx.burst(tmp.copy(food.position).setY(food.position.y + 0.16), {
         n: 12, color: 0xff87a4, speed: 1.5, size: 0.08, life: 0.6, up: 1.4, debris: 4, debrisColor: 0xc0325a,
       });
@@ -233,9 +297,11 @@ export function createTaming(ctx, { creatures, player, fx, bus }) {
     onEatFromHand(cr) {
       const st = stateOf(cr);
       st.act = 'handEat'; st.actT = 1.8;
+      // taking it from your hand is the braver move, so it settles sooner
+      st.fedCd = FED_COOLDOWN * 0.55;
       cr.playAnim?.('eat');
       cr.mood = 'eating';
-      const gained = addTrust(cr, 0.27, 'ate-from-hand');
+      const gained = advance(cr, 'ate-from-hand');
       tmp.copy(cr.position); tmp.y += (cr.stats?.size ?? 0.9) * 0.75;
       fx.burst(tmp, { n: 16, color: 0xffd0dd, speed: 1.4, size: 0.085, life: 0.75, up: 1.3, debris: 4, debrisColor: 0xc0325a });
       emote(cr, 'heart', 1.6);
@@ -249,7 +315,9 @@ export function createTaming(ctx, { creatures, player, fx, bus }) {
       st.act = 'settle'; st.actT = 1.0;
       st.petCd = 1.1;
       cr.playAnim?.('happy');
-      const gained = addTrust(cr, 0.13, 'petted');
+      // affection is not a shortcut: it fills the current gate, it never crosses one
+      const cap = patienceCap(st.stage);
+      const gained = addTrust(cr, Math.max(0, Math.min(0.09, cap - st.trust)), 'petted');
       tmp.copy(cr.position); tmp.y += (cr.stats?.size ?? 0.9) * 0.8;
       fx.burst(tmp, { n: 10, color: 0xffd6e2, speed: 1.0, size: 0.075, life: 0.8, up: 1.1 });
       emote(cr, 'heart', 1.4);
@@ -274,6 +342,8 @@ export function createTaming(ctx, { creatures, player, fx, bus }) {
       cr.tamed = true;
       cr.mood = 'happy';
       st.stage = 4;
+      st.fed = 3;
+      st.fedCd = 0;
       st.engaged = false;
       cr.playAnim?.('happy');
       const h = (cr.stats?.size ?? 0.9);

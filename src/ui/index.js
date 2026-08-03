@@ -35,9 +35,18 @@ const FIELD_NOTES = {
   emberfox: 'Warm to the touch. Follows anything that smells of berries, then pretends it did not.',
   mosshorn: 'Moss grows on the left horn only. Walks the same circuit every morning.',
 };
-const MOOD_WORDS = {
-  calm: 'at ease', curious: 'curious', wary: 'wary', afraid: 'skittish',
-  happy: 'content', eating: 'grazing', sleeping: 'asleep',
+/**
+ * The line under a creature's name used to be its MOOD — "at ease", "wary", "grazing".
+ * A stranger cannot tell those apart in tone, so a creature one berry from being a
+ * companion looked exactly like a creature that had never met you. That line now carries
+ * the only two facts that matter: how far along the arc you are, and what finishing costs.
+ */
+const STAGE_WORDS = {
+  wild: 'unaware', noticed: 'noticed', curious: 'curious',
+  trusting: 'trusting', bonded: 'companion',
+};
+const RESOURCE_WORDS = {
+  berry: ['Berry bush', 'ripe'], wood: ['Fallen branches', 'dry'], stone: ['Loose stone', 'workable'],
 };
 
 const CSS = `
@@ -129,12 +138,33 @@ const CSS = `
   background:radial-gradient(ellipse 76% 64% at 74% 50%,rgba(10,7,3,.68),rgba(10,7,3,0) 74%)}
 #eg-ui .ret .nm{font-size:calc(23*var(--s));line-height:1.05;letter-spacing:.01em;
   text-shadow:0 calc(2*var(--s)) calc(5*var(--s)) rgba(8,5,2,.95)}
-#eg-ui .ret .md{font-family:var(--micro);font-size:calc(9.5*var(--s));font-weight:700;letter-spacing:.22em;
-  text-transform:uppercase;color:#e8cf9e;opacity:.8;margin-top:calc(4*var(--s))}
+#eg-ui .ret .md{display:flex;align-items:center;gap:calc(8*var(--s));margin-top:calc(6*var(--s));
+  font-family:var(--micro);font-size:calc(9.5*var(--s));font-weight:700;letter-spacing:.22em;
+  text-transform:uppercase;color:#e8cf9e;opacity:.86}
+#eg-ui .ret.flip .md{justify-content:flex-end}
+#eg-ui .ret .md .cost{opacity:.72;letter-spacing:.16em}
+#eg-ui .ret .md.last{color:#ffcf86;opacity:1}
+#eg-ui .ret .md.last .cost{opacity:.95}
 #eg-ui .ret .act{display:flex;align-items:center;gap:calc(9*var(--s));margin-top:calc(11*var(--s))}
 #eg-ui .ret.flip .act{justify-content:flex-end}
 #eg-ui .ret .vb{font-size:calc(15.5*var(--s));letter-spacing:.01em;
   text-shadow:0 calc(1.5*var(--s)) calc(4*var(--s)) rgba(8,5,2,.95)}
+
+/* ---- tally: four scratched strokes, the naturalist's count of what a creature owes ---- */
+#eg-ui .tal{display:inline-flex;align-items:flex-end;gap:calc(3.5*var(--s));flex:0 0 auto}
+#eg-ui .tal i{display:block;width:calc(2.4*var(--s));height:calc(11*var(--s));
+  background:rgba(246,234,210,.26);box-shadow:0 0 calc(4*var(--s)) rgba(8,5,2,.9)}
+#eg-ui .tal i.on{background:var(--ember);
+  box-shadow:0 0 calc(8*var(--s)) rgba(231,155,66,.8),0 0 calc(3*var(--s)) rgba(8,5,2,.9)}
+#eg-ui .tal i.done{background:#f8eed8;box-shadow:0 0 calc(9*var(--s)) rgba(248,238,216,.7)}
+
+/* ---- the one you left half-tamed: a quiet world-anchored tag, never a card ---- */
+#eg-ui .mark{position:absolute;left:0;top:0;display:flex;align-items:center;gap:calc(8*var(--s));
+  white-space:nowrap;padding:calc(8*var(--s)) calc(13*var(--s));margin:calc(-8*var(--s)) calc(-13*var(--s));
+  background:radial-gradient(ellipse 72% 60% at 50% 50%,rgba(10,7,3,.5),rgba(10,7,3,0) 78%)}
+#eg-ui .mark .lbl{font-family:var(--micro);font-size:calc(9.5*var(--s));font-weight:700;
+  letter-spacing:.2em;text-transform:uppercase;text-shadow:var(--lift)}
+#eg-ui .mark .tal i{height:calc(9*var(--s))}
 
 /* ---- toasts, stacked above the satchel ---- */
 #eg-ui .toasts{position:absolute;right:calc(34*var(--s));bottom:calc(66*var(--s));
@@ -258,7 +288,11 @@ export function createUI() {
   let lastPos = null, engaged = false;
 
   // reticle
-  const ret = { a: 0, x: 0, y: 0, scale: 1, target: null, name: '', mood: '', trust: 0 };
+  const ret = { a: 0, x: 0, y: 0, scale: 1, target: null, name: '', mood: '', trust: 0,
+    stage: '', cost: '', need: 0, onScreen: false };
+  // the dimmed marker on a creature you started taming and walked away from
+  const mrk = { a: 0, target: null, name: '', stage: 0, need: 0, text: '', edge: false };
+  let goalT = 0, goalDone = false;   // the one line that says what the game is about
 
   const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
   const approach = (a, b, rate, dt) => a + (b - a) * (1 - Math.exp(-rate * dt));
@@ -353,9 +387,14 @@ export function createUI() {
             <circle r="1.5" fill="rgba(248,238,216,.95)"/>
           </svg>
           <div class="lead"></div>
-          <div class="card sh"><div class="nm"></div><div class="md"></div>
+          <div class="card sh"><div class="nm"></div>
+            <div class="md"><span class="stg"></span><span class="tal"
+              ><i></i><i></i><i></i><i></i></span><span class="cost"></span></div>
             <div class="act"><span class="key"></span><span class="vb"></span></div></div>
         </div>
+
+        <div class="mark" style="opacity:0"><span class="tal"
+          ><i></i><i></i><i></i><i></i></span><span class="lbl"></span></div>
 
         <div class="chev" style="opacity:0"><svg width="30" height="30" viewBox="-15 -15 30 30">
           <g filter="url(#eg-rough)"><path d="M-7,-5 L0,3 L7,-5" fill="none" stroke="rgba(12,8,4,.7)" stroke-width="5"
@@ -391,8 +430,14 @@ export function createUI() {
       el.arc = host.querySelector('.ret .arc');
       el.retName = host.querySelector('.ret .nm');
       el.retMood = host.querySelector('.ret .md');
+      el.retStage = host.querySelector('.ret .md .stg');
+      el.retTally = [...host.querySelectorAll('.ret .md .tal i')];
+      el.retCost = host.querySelector('.ret .md .cost');
       el.retKey = host.querySelector('.ret .key');
       el.retVerb = host.querySelector('.ret .vb');
+      el.mark = host.querySelector('.mark');
+      el.markTally = [...host.querySelectorAll('.mark .tal i')];
+      el.markLbl = host.querySelector('.mark .lbl');
       el.chev = host.querySelector('.chev');
       el.teach = host.querySelector('.teach');
       el.whisper = host.querySelector('.whisper');
@@ -433,7 +478,12 @@ export function createUI() {
         api.notify(`${creature.def.name} stays close now.`, { kind: 'discovery', species: creature.species,
           eyebrow: 'Companion', ttl: 5.5 });
       });
-      c.bus.on('interact:focus', ({ target }) => { if (target) discover(target.species); });
+      c.bus.on('interact:focus', ({ target, kind }) => {
+        if (target) discover(target.species);
+        // The single sentence that says what the game is about, fired at the only moment
+        // it is useful: the first time a wild creature is actually on screen and reachable.
+        if (kind === 'creature' && !goalDone) { goalDone = true; goalT = 7.5; }
+      });
       c.bus.on('inventory:change', (inv) => { if (inv && typeof inv.berry === 'number') berries = inv.berry; });
       const gathered = (p) => {
         const name = p?.name ?? p?.item ?? 'Berry';
@@ -452,6 +502,7 @@ export function createUI() {
 
       updateVitals(dt, c);
       updateReticle(dt, c);
+      updateMarker(dt, c);
       updateColdOpen(dt, c);
       updateToasts(dt);
       updateCompass(dt, c);
@@ -480,7 +531,10 @@ export function createUI() {
       currentPrompt = p;
       if (!el.retKey) return;
       if (p) {
-        setText(el.retKey, p.key ?? 'F');
+        // A keycap is a promise that pressing it helps. When it would not, we do not
+        // print one — the line still says what the creature needs.
+        el.retKey.style.display = p.key ? '' : 'none';
+        setText(el.retKey, p.key ?? '');
         // The name is already the headline of the card; a verb that repeats it reads
         // like a database row. "Toss a berry to Emberfox" -> "Toss a berry".
         let verb = p.text ?? '';
@@ -530,8 +584,17 @@ export function createUI() {
       }
       if (ret.a > 0.35 && currentPrompt) {
         visible.push(ret.name);
-        if (ret.mood) visible.push(ret.mood);
-        visible.push(`[${currentPrompt.key}] ${currentPrompt.text}`);
+        if (ret.stage) {
+          const pips = ret.target && !ret.target.kind
+            ? ` ${'●'.repeat(ret.need >= 0 ? 4 - ret.need : 4)}${'○'.repeat(Math.max(0, ret.need))}`
+            : '';
+          visible.push(`${ret.stage.toUpperCase()}${pips}${ret.cost ? ` · ${ret.cost}` : ''}`);
+        }
+        visible.push(currentPrompt.key
+          ? `[${currentPrompt.key}] ${currentPrompt.text}` : currentPrompt.text);
+      }
+      if (mrk.a > 0.12 && mrk.target) {
+        visible.push(`${'●'.repeat(mrk.stage)}${'○'.repeat(Math.max(0, 4 - mrk.stage))} ${mrk.text}`);
       }
       if (journalA < 0.5) for (const t2 of toasts) if (t2.el.style.opacity > 0.3) visible.push(t2.text);
       visible.push(`Recorded ${discovered.size} of ${speciesOrder.length}`);
@@ -582,30 +645,73 @@ export function createUI() {
     return _v;
   }
 
+  /** paint N of 4 strokes; the 4th only lights when the creature is actually a companion */
+  function paintTally(list, stage) {
+    for (let i = 0; i < list.length; i++) {
+      const on = i < stage;
+      list[i].className = on ? (stage >= 4 ? 'done' : 'on') : '';
+    }
+  }
+
   function updateReticle(dt, c) {
-    const focus = c.get('interaction')?.focus ?? null;
+    const inter = c.get('interaction');
+    const focus = inter?.focus ?? null;
     ret.target = focus;
-    const want = focus && currentPrompt && !journalOpen ? 1 : 0;
-    ret.a = approach(ret.a, want, 11, dt);
 
     if (focus) {
       // Chest height, not over the head: the interaction layer flies its own trust
       // gauge above the skull and two rings stacked on one creature reads as a bug.
       const size = focus.def?.size ?? 1;
       const s = project(c, focus.position, size * 0.55 + 0.1);
+      const w0 = c.renderer.domElement.clientWidth || window.innerWidth;
+      const h0 = c.renderer.domElement.clientHeight || window.innerHeight;
+      // A card anchored to something behind the camera is drawn at a stale position
+      // off the edge of the frame: the snapshot claims the player was told something
+      // they could not possibly see. Off-frame means hidden here and handed to the
+      // edge-clamped marker instead.
+      ret.onScreen = s.z < 1 && s.x > -40 && s.x < w0 + 40 && s.y > -40 && s.y < h0 + 40;
       if (s.z < 1) {
         ret.x = s.x; ret.y = s.y;
         const d = focus.position.distanceTo(player.position);
         ret.scale = Math.max(0.72, Math.min(1.18, 1.5 - d * 0.09));
       }
-      ret.name = focus.def?.name ?? speciesName(focus.species);
-      ret.mood = MOOD_WORDS[focus.mood] ?? focus.mood ?? '';
-      ret.trust = focus.trust ?? 0;
+      if (focus.kind) {
+        // a gatherable, not a creature — it has no arc, so it gets a state word and no tally
+        const [nm, word] = RESOURCE_WORDS[focus.kind] ?? ['Growth', 'ready'];
+        ret.name = nm;
+        ret.stage = focus.ready ? word : 'picked clean';
+        ret.cost = '';
+        ret.need = 0;
+        ret.trust = 0;
+        paintTally(el.retTally, 0);
+        el.retTally.forEach((n) => { n.style.display = 'none'; });
+      } else {
+        const r = inter?.readout?.(focus) ?? null;
+        const stage = focus.tamed ? 4 : (r?.stage ?? 0);
+        ret.name = focus.def?.name ?? speciesName(focus.species);
+        ret.stage = STAGE_WORDS[r?.name ?? 'wild'] ?? (r?.name ?? '');
+        ret.need = r?.need ?? 0;
+        // The cost, in the slot where the mood word used to live. This is the whole fix.
+        ret.cost = stage >= 4 ? 'travels with you'
+          : ret.need <= 1 ? '1 berry to go'
+            : `${ret.need} berries to go`;
+        ret.trust = focus.trust ?? r?.trust ?? 0;
+        el.retTally.forEach((n) => { n.style.display = ''; });
+        paintTally(el.retTally, stage);
+      }
+      el.retMood.classList.toggle('last', !focus.kind && ret.need === 1);
       setText(el.retName, ret.name);
-      setText(el.retMood, ret.mood);
+      setText(el.retStage, ret.stage);
+      setText(el.retCost, ret.cost);
+      ret.mood = ret.cost ? `${ret.stage} · ${ret.cost}` : ret.stage;
       const C = 2 * Math.PI * 16;
       el.arc.setAttribute('stroke-dasharray', `${(C * clamp01(ret.trust)).toFixed(1)} ${C.toFixed(1)}`);
+    } else {
+      ret.onScreen = false;
     }
+
+    const want = focus && currentPrompt && ret.onScreen && !journalOpen ? 1 : 0;
+    ret.a = approach(ret.a, want, 11, dt);
 
     if (ret.a < 0.004) { el.ret.style.opacity = '0'; return; }
     const breathe = 1 + Math.sin(t * 1.9) * 0.018;
@@ -614,6 +720,52 @@ export function createUI() {
     el.ret.style.opacity = ret.a.toFixed(3);
     el.ret.style.transform =
       `translate3d(${ret.x.toFixed(1)}px,${ret.y.toFixed(1)}px,0) scale(${(ret.scale * breathe * (0.86 + 0.14 * ret.a)).toFixed(4)})`;
+  }
+
+  // ------------------------------------------------------------- world marker
+  /**
+   * The reticle only lives inside prompt range. Without this, a creature you got to
+   * "one more berry" vanishes off the HUD the moment it wanders 13m away, and the player
+   * walks off never knowing they were one button from a companion. So the label survives
+   * the cutoff: dimmer, smaller, no keycap, clamped to the frame edge if it goes
+   * off-screen — a place to walk back to rather than a thing to press.
+   */
+  function updateMarker(dt, c) {
+    const inter = c.get('interaction');
+    // If the creature you are actually engaged with has gone behind you, the reticle
+    // hides — so the marker picks it up and pins it to the edge of the frame. There is
+    // never a moment where an in-progress creature is untracked.
+    const offScreenFocus = ret.target && !ret.target.kind && !ret.onScreen ? ret.target : null;
+    const cr = offScreenFocus ?? inter?.marked ?? null;
+    const show = cr && !journalOpen && (cr !== ret.target || !ret.onScreen);
+    mrk.target = show ? cr : null;
+
+    if (show) {
+      const r = inter?.readout?.(cr) ?? null;
+      mrk.stage = r?.stage ?? 1;
+      mrk.need = r?.need ?? 3;
+      mrk.name = cr.def?.name ?? speciesName(cr.species);
+      const txt = `${mrk.name} · ${mrk.need <= 1 ? '1 berry' : `${mrk.need} berries`}`;
+      setText(el.markLbl, txt);
+      mrk.text = txt;
+      paintTally(el.markTally, mrk.stage);
+
+      const s = project(c, cr.position, (cr.def?.size ?? 1) * 1.55 + 0.5);
+      const w = c.renderer.domElement.clientWidth || window.innerWidth;
+      const h = c.renderer.domElement.clientHeight || window.innerHeight;
+      const behind = s.z > 1;
+      let x = behind ? (s.x > w / 2 ? 0 : w) : s.x;
+      let y = behind ? h * 0.52 : s.y;
+      mrk.edge = behind || x < 96 || x > w - 96 || y < 44 || y > h - 120;
+      x = Math.max(96, Math.min(w - 96, x));
+      y = Math.max(44, Math.min(h - 120, y));
+      el.mark.style.transform =
+        `translate3d(${x.toFixed(1)}px,${y.toFixed(1)}px,0) translate(-50%,-50%)`;
+    }
+    // never louder than the thing you are actually looking at
+    const wantA = show ? (mrk.edge ? 0.34 : 0.5) * (1 - ret.a * 0.45) : 0;
+    mrk.a = approach(mrk.a, wantA, 6, dt);
+    el.mark.style.opacity = mrk.a.toFixed(3);
   }
 
   // ------------------------------------------------------------------ compass
@@ -686,10 +838,15 @@ export function createUI() {
     el.teach.style.transform =
       `translateX(-50%) translateY(${((1 - open.a) * 10).toFixed(1)}px)`;
 
-    // Two lines exist in the whole opening. One is a browser fact, one is a nudge.
+    // Three lines exist in the whole opening. One is a browser fact, one is a nudge, and
+    // one — six words, shown once, the first time a creature is in front of you — is the
+    // entire premise of the game. Before this the player was never told what to want.
+    goalT = Math.max(0, goalT - dt);
+    if (!goalDone && open.beat === 'seek' && open.held > 9) { goalDone = true; goalT = 7.5; }
     let line = '';
     if (journalOpen) line = '';
     else if (!engaged && !c.game.captureMode && open.t > 3.2) line = 'Click to look around';
+    else if (goalT > 0) line = 'Berries make friends here';
     else if (open.beat === 'look' && engaged) line = 'Look around';
     if (line && el.whisper.textContent !== line) el.whisper.textContent = line;
     const wa = approach(Number(el.whisper.style.opacity) || 0, line ? 0.82 : 0, 6, dt);

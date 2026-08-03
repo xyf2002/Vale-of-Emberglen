@@ -256,23 +256,45 @@ export function furTexture(rng, { size = 256, contrast = 0.11, streak = 0.55, tu
  * Without this every creature floats.
  */
 export function contactShadowTexture() {
-  const S = 96;
+  const S = 128;
   const c = mkCanvas(S, S);
   const g = c.getContext('2d');
   g.fillStyle = '#ffffff';
   g.fillRect(0, 0, S, S);
   const grd = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
-  // "distinctly darker, with a hard-ish inner core and ~0.2 m of falloff" — but this is
-  // a MULTIPLY decal, so alpha 0.86 means multiplying the ground by 0.14, i.e. black.
-  // A contact shadow that reads as a hole is as wrong as no contact shadow at all.
-  grd.addColorStop(0.00, 'rgba(52,44,58,0.62)');
-  grd.addColorStop(0.34, 'rgba(70,62,76,0.50)');
-  grd.addColorStop(0.66, 'rgba(140,134,146,0.20)');
-  grd.addColorStop(1.00, 'rgba(255,255,255,0)');
+
+  // THE BUG THIS SOLVES, measured rather than guessed. The decal was drawing, blending
+  // and positioned correctly — a probe that swapped the map for a flat grey produced a
+  // black slab under every creature. What made it invisible is that the falloff was
+  // essentially over by 60 % of the radius, and the creature's own body covers the
+  // inner ~55-65 % of the decal. Every pixel a camera can actually SEE was multiplying
+  // the ground by 0.8-1.0, i.e. by nothing. The core was perfect and permanently hidden.
+  //
+  // So the profile now holds a dark PLATEAU out past the silhouette edge and does its
+  // falloff in the outer third. These are opaque stops composited straight onto white,
+  // because this is a MULTIPLY decal: the value here *is* the multiplier.
+  //
+  // Values are cool and desaturated, never black or grey — reference observation #9
+  // says a shadow is a cooler, less saturated version of the lit colour, so blue is
+  // attenuated least. At the darkest visible ring the ground goes to ~0.30 of its lit
+  // luminance, comparable to the 25-luma delta the player's own contact shadow makes.
+  grd.addColorStop(0.00, 'rgb(104,111,132)');
+  grd.addColorStop(0.34, 'rgb(110,117,138)');
+  grd.addColorStop(0.52, 'rgb(128,135,156)');
+  grd.addColorStop(0.68, 'rgb(168,174,192)');
+  grd.addColorStop(0.83, 'rgb(214,218,229)');
+  grd.addColorStop(0.94, 'rgb(243,245,249)');
+  grd.addColorStop(1.00, 'rgb(255,255,255)');
   g.fillStyle = grd;
   g.beginPath(); g.arc(S / 2, S / 2, S / 2, 0, 6.2832); g.fill();
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
+  // no mips: at grazing angles a mipped 1x1 of this texture averages to near-white and
+  // the shadow quietly evaporates in the mid ground, which is the same failure again.
+  t.generateMipmaps = false;
+  t.minFilter = THREE.LinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
   return t;
 }
 

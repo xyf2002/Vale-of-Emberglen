@@ -169,6 +169,11 @@ export function createTerrain(ctx) {
   const CN = Math.round((HALF * 2) / CSTEP) + 1;
   const cover = new Uint8Array(CN * CN);
   const dirt = new Uint8Array(CN * CN);
+  // `dirt` conflates two different things: ground people have walked bare (a real
+  // change of MATERIAL) and ground where the grass is merely thin (a change of
+  // DENSITY). Painting both as soil turned half the meadow into a mud flat. `bare`
+  // carries only the first.
+  const bare = new Uint8Array(CN * CN);
 
   function slopeFromLut(x, z) {
     const e = 1.6;
@@ -214,6 +219,10 @@ export function createTerrain(ctx) {
 
       cover[j * CN + i] = Math.round(clamp(g, 0, 1) * 255);
       dirt[j * CN + i] = Math.round(clamp(d, 0, 1) * 255);
+      // trodden earth: the path itself, the shoreline, and only the very baldest
+      // scuffs — never the broad thin-grass patches
+      const b = clamp(onPath * 0.95 + shore * 0.85 + smoothstep(0.72, 1.00, bald) * 0.55 + scuff * bald * 0.20, 0, 1);
+      bare[j * CN + i] = Math.round(b * 255);
     }
   }
 
@@ -228,9 +237,10 @@ export function createTerrain(ctx) {
 
   const grassAt = (x, z) => sampleU8(cover, x, z);
   const dirtAt = (x, z) => sampleU8(dirt, x, z);
+  const bareAt = (x, z) => sampleU8(bare, x, z);
 
   return {
-    analytic, heightAt, slopeAt: slopeFromLut, grassAt, dirtAt,
+    analytic, heightAt, slopeAt: slopeFromLut, grassAt, dirtAt, bareAt,
     waterLevel, paths, STEP, HALF,
     normalAt(x, z) {
       const e = 1.2;
@@ -254,7 +264,7 @@ const C = (hex) => new THREE.Color(hex).convertSRGBToLinear();
 // meadow renders as bright blades floating over a dark, differently-hued floor --
 // which is exactly what the frames showed. Same hue family, slightly lighter, so
 // the two read as one surface.
-const PAL = {
+export const PAL = {
   lush: C(0xb5c283),
   dry: C(0xd0c893),
   shade: C(0x93a073),
@@ -263,16 +273,38 @@ const PAL = {
   dirtC: C(0xc0aa84),
   sand: C(0xd6c8a2),
   high: C(0xacb89d),
+  // the average albedo of the instanced blade carpet, so the terrain past the last
+  // blade can be blended into the same colour family (see uCanopy in world/index.js)
+  canopy: C(0xbcc785),
 };
 
+/**
+ * Ground geometry.
+ *
+ * The vertex `color` now carries ONLY the grass/soil-family BASE tint -- the broad
+ * dryness / moisture / altitude drift that varies over tens of metres. Everything
+ * that changes material (worn soil, exposed rock, shoreline sand, how much grass is
+ * actually growing) is exported as a per-vertex MASK instead:
+ *
+ *   aMask.x  worn / trodden soil          0..1
+ *   aMask.y  exposed rock (slope-driven)  0..1
+ *   aMask.z  shoreline sand               0..1
+ *   aMask.w  grass coverage               0..1
+ *
+ * The fragment shader blends the actual albedos against those masks with noisy,
+ * pixel-resolution edges. Doing the blend per VERTEX (which is what this used to do)
+ * meant every material transition was a 2.2 m linear ramp, so the ground could only
+ * ever be one smooth olive wash: no visible patch boundaries, no local contrast, and
+ * a single flat value from the player's feet to the base of the hills.
+ */
 export function buildGroundMesh(ctx, T, radius, segs) {
   const noise = ctx.noise;
   const geo = new THREE.PlaneGeometry(radius * 2, radius * 2, segs, segs);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position;
   const colAttr = new Float32Array(pos.count * 3);
+  const maskAttr = new Float32Array(pos.count * 4);
   const c = new THREE.Color();
-  const tmp = new THREE.Color();
 
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), z = pos.getZ(i);
@@ -281,45 +313,40 @@ export function buildGroundMesh(ctx, T, radius, segs) {
 
     const sl = T.slopeAt(x, z);
     const d = T.dirtAt(x, z);
+    const g = T.grassAt(x, z);
     const dryness = smoothstep(-0.22, 0.30, noise.fbm(x * 0.0085 + 61, z * 0.0085 - 19, 3));
     const moist = smoothstep(14, 4, h) * 0.6 + smoothstep(0.30, -0.15, noise.fbm(x * 0.012 - 4, z * 0.012 + 27, 3)) * 0.4;
-
-    // Metre-scale scuff, matched to the grass tint field so the carpet and the
-    // surface it grows out of agree. Without it the terrain past the grass radius
-    // is a single flat green, which is what made the mid-ground read as felt.
-    const scuff = smoothstep(-0.30, 0.35, noise.fbm(x * 0.085 - 12, z * 0.085 + 7, 2));
     const patch = smoothstep(-0.28, 0.28, noise.fbm(x * 0.026 + 91, z * 0.026 + 43, 3));
 
-    c.copy(PAL.lush).lerp(PAL.dry, clamp(dryness * 0.95 + scuff * 0.30 + patch * 0.26, 0, 1));
+    // thin cover means more straw and exposed root showing through, not bare earth
+    c.copy(PAL.lush).lerp(PAL.dry, clamp(dryness * 0.90 + patch * 0.24 + d * 0.34, 0, 1));
     c.lerp(PAL.shade, clamp(moist, 0, 1) * 0.48 + (1 - patch) * 0.22);
     // a stony/olive family on the drier high shoulders, so the landscape is not two
     // hues wide -- the plates render 800-1600 distinct quantised colours where a
     // meadow of one green renders 400
     c.lerp(PAL.rockWarm, smoothstep(0.55, 0.95, dryness) * (1 - moist) * 0.30);
     c.lerp(PAL.high, smoothstep(48, 92, h) * 0.7);
-    // slope rock
-    const rockAmt = smoothstep(0.34, 0.66, sl);
-    tmp.copy(PAL.rock).lerp(PAL.rockWarm, smoothstep(-0.2, 0.2, noise.fbm(x * 0.03, z * 0.03, 2)));
-    c.lerp(tmp, rockAmt);
-    // worn soil
-    c.lerp(PAL.dirtC, d * 0.72 * (1 - rockAmt));
-    // shoreline
-    const shore = smoothstep(2.2, -0.6, h - T.waterLevel) * smoothstep(LAKE.r + 24, LAKE.r - 8, Math.hypot(x - LAKE.x, z - LAKE.z));
-    c.lerp(PAL.sand, shore * 0.85);
 
-    // value break-up centred on 1.0, not 0.90 -- the old mean quietly took another
-    // 10% off every ground vertex on top of the detail map
-    const v = 1.0 + 0.20 * noise.fbm(x * 0.045 + 3, z * 0.045 - 6, 2) + 0.10 * noise.fbm(x * 0.006, z * 0.006, 2);
+    // broad value break-up centred on 1.0
+    const v = 1.0 + 0.16 * noise.fbm(x * 0.006, z * 0.006, 2);
     colAttr[i * 3] = c.r * v; colAttr[i * 3 + 1] = c.g * v; colAttr[i * 3 + 2] = c.b * v;
+
+    const shore = smoothstep(2.2, -0.6, h - T.waterLevel) * smoothstep(LAKE.r + 24, LAKE.r - 8, Math.hypot(x - LAKE.x, z - LAKE.z));
+    maskAttr[i * 4] = clamp(T.bareAt(x, z), 0, 1);
+    maskAttr[i * 4 + 1] = smoothstep(0.30, 0.62, sl);
+    maskAttr[i * 4 + 2] = clamp(shore * 0.95, 0, 1);
+    maskAttr[i * 4 + 3] = clamp(g, 0, 1);
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colAttr, 3));
+  geo.setAttribute('aMask', new THREE.BufferAttribute(maskAttr, 4));
   geo.computeVertexNormals();
   geo.computeBoundingSphere();
   return geo;
 }
 
 /** Low-res ring carrying the landscape from the playable rim out to the horizon. */
-export function buildSkirtGeometry(T, r0, r1, rings, segs) {
+export function buildSkirtGeometry(ctx, T, r0, r1, rings, segs) {
+  const noise = ctx.noise;
   // The far range was the loudest "low-poly" tell in the frame: at 26 rings / 96
   // segments the first ring lands ~35 m triangles at 500 m, which is ~2 deg of arc
   // and reads as faceted origami. Reference #7 wants the far plane to be a smooth,
@@ -339,10 +366,21 @@ export function buildSkirtGeometry(T, r0, r1, rings, segs) {
       const x = Math.cos(a) * r, z = Math.sin(a) * r;
       const h = T.analytic(x, z);
       verts.push(x, h, z);
+
+      // Reference #7 wants the far plane pale and desaturated, but "pale" is not the
+      // same as "one flat value". The old colouring was a pure function of height, so
+      // every distant range came out as a single-facet white cutout with no rock
+      // striation and no shading break. Three terms fix that while staying inside the
+      // low-saturation band: horizontal bedrock banding, a broken snow line, and a
+      // large-scale value drift that puts light and dark shoulders on the same ridge.
+      const strat = noise.fbm(h * 0.026 + x * 0.0009, h * 0.026 + z * 0.0009, 3);
+      const drift = noise.fbm(x * 0.0021 + 3.3, z * 0.0021 - 7.1, 3);
       const green = smoothstep(210, 90, h);
-      const snow = smoothstep(330, 470, h);
-      c.copy(PAL.rock).lerp(PAL.shade, green * 0.8).lerp(C(0xe8eef2), snow * 0.85);
-      cols.push(c.r, c.g, c.b);
+      const snowLine = 300 + 120 * drift + 60 * strat;
+      const snow = smoothstep(snowLine, snowLine + 130, h);
+      c.copy(PAL.rock).lerp(PAL.shade, green * 0.8).lerp(C(0xe8eef2), snow * 0.88);
+      const v = 1 + 0.17 * strat + 0.13 * drift - 0.05 * green;
+      cols.push(c.r * v, c.g * v, c.b * v);
     }
   }
   const row = segs + 1;

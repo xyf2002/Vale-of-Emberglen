@@ -45,7 +45,108 @@ export function paint(geo, hex, jitter = 0, noiseFn = null) {
   return g;
 }
 
+/**
+ * Undo a double sRGB->linear conversion baked into a geometry's vertex colours.
+ *
+ * `new THREE.Color(hex)` already lands in linear working space (ColorManagement is on),
+ * so any builder that also calls .convertSRGBToLinear() ends up with an albedo 5-8x
+ * darker than the hex it authored. The rock geometry is built that way: 0x8e8e85, a
+ * mid grey, arrives as linear 0.028 — darker than wet asphalt. Lit rock rendered at
+ * ~107/255 and shadowed rock at ~50/255, so every boulder in the meadow read as a black
+ * hole rather than as one of the "three or four material changes across the shot" that
+ * reference #8 asks for, and the moss cap on it had nothing to sit on.
+ *
+ * The generator lives outside this system, so the correction is applied to the finished
+ * attribute here rather than by reaching into someone else's file.
+ */
+export function liftVertexAlbedo(geo, gain) {
+  const a = geo?.attributes?.color;
+  if (!a) return geo;
+  const arr = a.array;
+  for (let i = 0; i < arr.length; i++) arr[i] = Math.min(1, arr[i] * gain);
+  a.needsUpdate = true;
+  return geo;
+}
+
 /* ---------------------------------------------------------------- ground texture */
+
+/** deterministic periodic value-noise sampler on a torus of period `per` */
+function periodicNoise(seed) {
+  const perm = new Uint8Array(512);
+  let s = seed >>> 0 || 1;
+  const rnd = () => { s = (Math.imul(s ^ (s >>> 15), s | 1) ^ (s + Math.imul(s ^ (s >>> 7), s | 61))) >>> 0; return s / 4294967296; };
+  const p = [...Array(256).keys()];
+  for (let i = 255; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [p[i], p[j]] = [p[j], p[i]]; }
+  for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+  const fade = (t) => t * t * t * (t * (t * 6 - 15) + 10);
+  const lp = (a, b, t) => a + (b - a) * t;
+  const grad = (h, x, y) => { switch (h & 3) { case 0: return x + y; case 1: return -x + y; case 2: return x - y; default: return -x - y; } };
+  return (x, y, per) => {
+    const X = Math.floor(x), Y = Math.floor(y);
+    const fx = x - X, fy = y - Y;
+    const u = fade(fx), v = fade(fy);
+    const X0 = ((X % per) + per) % per, X1 = (X0 + 1) % per;
+    const Y0 = ((Y % per) + per) % per, Y1 = (Y0 + 1) % per;
+    const A0 = perm[perm[X0] + Y0], A1 = perm[perm[X0] + Y1];
+    const B0 = perm[perm[X1] + Y0], B1 = perm[perm[X1] + Y1];
+    return lp(lp(grad(A0, fx, fy), grad(B0, fx - 1, fy), u), lp(grad(A1, fx, fy - 1), grad(B1, fx - 1, fy - 1), u), v);
+  };
+}
+
+/**
+ * Three DECORRELATED periodic fbm fields packed into R/G/B, stored raw (no colour
+ * space encoding, no mipmap-killing filters). This is the material-blend mask the
+ * ground shader runs on: sampled at four world scales it supplies the "two or three
+ * low-frequency noise octaves" the critique asks for without a per-pixel fbm loop.
+ *
+ * Each channel gets its own permutation table AND its own base frequency, so the
+ * three fields do not share features — sampling R at 23 m and G at 4 m gives genuinely
+ * independent patch boundaries rather than the same blob at two sizes.
+ *
+ * Every channel is normalised to fill 0..1 after generation, so smoothstep thresholds
+ * in the shader mean what they look like they mean.
+ */
+export function makeMaskTexture(seed, size = 256, bases = [5, 7, 11], octaves = 4) {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = size;
+  const g = cv.getContext('2d');
+  const img = g.createImageData(size, size);
+  const chans = [];
+  for (let c = 0; c < 3; c++) {
+    const pn = periodicNoise((seed ^ (0x9e37 * (c + 1))) >>> 0);
+    const base = bases[c];
+    const buf = new Float32Array(size * size);
+    let lo = 1e9, hi = -1e9;
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        let a = 1, f = base, sum = 0, nrm = 0;
+        for (let o = 0; o < octaves; o++) {
+          sum += a * pn((x / size) * f, (y / size) * f, f);
+          nrm += a; a *= 0.55; f *= 2;
+        }
+        const v = sum / nrm;
+        buf[y * size + x] = v;
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      }
+    }
+    const inv = 1 / Math.max(1e-5, hi - lo);
+    for (let i = 0; i < buf.length; i++) buf[i] = (buf[i] - lo) * inv;
+    chans.push(buf);
+  }
+  for (let i = 0; i < size * size; i++) {
+    img.data[i * 4] = Math.round(chans[0][i] * 255);
+    img.data[i * 4 + 1] = Math.round(chans[1][i] * 255);
+    img.data[i * 4 + 2] = Math.round(chans[2][i] * 255);
+    img.data[i * 4 + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.anisotropy = 8;
+  return tex;
+}
 
 /** seamless tiling value-noise texture, generated at runtime (no external assets) */
 export function makeNoiseTexture(seed, size = 256, freq = 5, octaves = 4, contrast = 0.30, tintA = 0x8b8b7a, tintB = 0xffffff) {
@@ -162,6 +263,13 @@ export function makeAerialMaterial(opts = {}) {
       uMax: { value: opts.maxHaze ?? 0.92 },
       uBase: { value: new THREE.Color(opts.color ?? 0xffffff).convertSRGBToLinear() },
       uDesat: { value: opts.desat ?? 0.55 },
+      // How much surface form survives the haze. At maxHaze 0.90 a straight mix leaves
+      // 10% of the shading, which is why the far ranges read as "flat paper cutouts:
+      // single-facet white silhouettes, no rock striation, no shading break". This
+      // re-applies the form term AFTER the haze as a multiplier around 1.0, so the
+      // mountains stay pale and desaturated (reference #7) while still having a lit
+      // shoulder and a shaded one.
+      uForm: { value: opts.form ?? 0.42 },
     },
     vertexShader: /* glsl */`
       varying vec3 vN; varying vec3 vW; varying vec3 vC;
@@ -173,7 +281,7 @@ export function makeAerialMaterial(opts = {}) {
       }`,
     fragmentShader: /* glsl */`
       uniform vec3 uFogS, uSun, uSunCol, uAmb, uBase;
-      uniform float uNear, uFar, uMax, uDesat;
+      uniform float uNear, uFar, uMax, uDesat, uForm;
       varying vec3 vN; varying vec3 vW; varying vec3 vC;
       void main() {
         vec3 n = normalize(vN);
@@ -181,6 +289,9 @@ export function makeAerialMaterial(opts = {}) {
         float sky = 0.5 + 0.5 * n.y;
         vec3 base = uBase * vC;
         vec3 c = base * (uAmb * (0.35 + 0.45 * sky) + uSunCol * (0.75 * ndl));
+        // the form term, kept aside so it can be re-applied on top of the haze below
+        float form = ndl * 0.58 + sky * 0.42;
+        float vLum = dot(vC, vec3(0.2126, 0.7152, 0.0722));
         float d = length(vW - cameraPosition);
         // same curve three's linear fog uses, so the seam with the terrain is invisible
         float f = smoothstep(uNear, uFar, d);
@@ -194,7 +305,12 @@ export function makeAerialMaterial(opts = {}) {
         float f2 = smoothstep(uFar, uFar * 3.4, d);
         float haze = min(1.0, f * uMax + f2 * (1.0 - uMax) * 0.8);
         c = mix(c, uFogS, haze);
-        gl_FragColor = vec4(c, 1.0);
+        // Put the shading break back. Without this the far ranges are a single flat
+        // value: a paper cutout. Scaled by the haze term so it only acts where the mix
+        // has already eaten the real shading, and centred on 1.0 so it changes contrast,
+        // not exposure — the horizon's mean luminance is unchanged.
+        c *= 1.0 + uForm * haze * ((form - 0.55) * 1.15 + (vLum - 0.62) * 0.9);
+        gl_FragColor = vec4(max(c, vec3(0.0)), 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }`,
@@ -231,7 +347,12 @@ export function syncAerial(mats, scene, sky) {
  * with a noisy, broken edge so it does not read as a clean gradient.
  */
 export function applyMossShader(mat, mossHex = 0x6d8a3c, opts = {}) {
-  const moss = new THREE.Color(mossHex).convertSRGBToLinear();
+  // NOT .convertSRGBToLinear(): ColorManagement is on, so `new THREE.Color(hex)` is
+  // already in linear working space (see paint() above). The second conversion made the
+  // moss ~7x too dark, which is why every rock and every ruin in the frames read as bare
+  // grey stone -- "moss on stone" is one of the four material changes reference #8 asks
+  // for across a single shot, and it was silently invisible.
+  const moss = new THREE.Color(mossHex);
   mat.userData.moss = { value: new THREE.Vector3(moss.r, moss.g, moss.b) };
   mat.userData.mossAmt = { value: opts.amount ?? 1.0 };
   mat.onBeforeCompile = (sh) => {

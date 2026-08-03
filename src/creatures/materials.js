@@ -82,7 +82,14 @@ export function furMaterial({ map, sheen = 0.0, rim = 0.15, rimColor = 0xffd7a8,
   return mat;
 }
 
-/** Shared multiply-blended contact-shadow decal pool. Reference observation #9. */
+/**
+ * Shared multiply-blended contact-shadow decal pool. Reference observation #9.
+ *
+ * Per-instance strength rides in instanceColor.r: 1 = full contact shadow, 0 = gone.
+ * A plain multiply cannot lighten, so the shader lerps the sampled multiplier back
+ * toward white instead — that is what lets a hopping creature's shadow soften and
+ * spread as it leaves the ground rather than sliding around underneath it.
+ */
 export function makeContactShadows(texture, max = 48) {
   const geo = new THREE.PlaneGeometry(1, 1);
   geo.rotateX(-Math.PI / 2);
@@ -98,10 +105,33 @@ export function makeContactShadows(texture, max = 48) {
     blendDst: THREE.SrcColorFactor,
     depthWrite: false,
     depthTest: true,
+    // the decal sits a couple of centimetres over a terrain mesh whose triangles are
+    // ~2 m across; polygon offset keeps it out of the z-fight zone on slopes without
+    // having to lift it far enough to visibly detach from the feet.
+    polygonOffset: true,
+    polygonOffsetFactor: -4,
+    polygonOffsetUnits: -8,
     toneMapped: false,
   });
+  mat.onBeforeCompile = (shader) => {
+    // three declares vColor in the VERTEX stage for USE_INSTANCING_COLOR but not in the
+    // fragment stage, so the per-instance value never arrives unless we declare it.
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <color_pars_fragment>', `#include <color_pars_fragment>
+        #if defined( USE_INSTANCING_COLOR ) && !defined( USE_COLOR ) && !defined( USE_COLOR_ALPHA )
+          varying vec4 vColor;
+        #endif`)
+      .replace('#include <color_fragment>', `
+        #ifdef USE_INSTANCING_COLOR
+          diffuseColor.rgb = mix( vec3( 1.0 ), diffuseColor.rgb, clamp( vColor.r, 0.0, 1.0 ) );
+        #endif`);
+  };
+  mat.customProgramCacheKey = () => 'contactShadow';
+
   const mesh = new THREE.InstancedMesh(geo, mat, max);
   mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(max * 3).fill(1), 3);
+  mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
   mesh.frustumCulled = false;
   mesh.renderOrder = 3;
   mesh.count = 0;

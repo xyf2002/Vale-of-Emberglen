@@ -59,7 +59,7 @@ export function createOffering(ctx, { player, world, fx }) {
     ctx.scene.add(g);
     food.push({
       root: g, mesh: m, position: g.position, vel: new THREE.Vector3(),
-      dead: true, landed: false, ttl: 0, t: 0, claimedBy: null, spin: 0,
+      dead: true, landed: false, ttl: 0, t: 0, claimedBy: null, intended: null, spin: 0,
     });
   }
 
@@ -91,7 +91,10 @@ export function createOffering(ctx, { player, world, fx }) {
       const tof = THREE.MathUtils.clamp(0.35 + dist * 0.115, 0.4, 1.35);
       f.position.copy(from);
       f.vel.set(dx / tof, (target.y - from.y) / tof + 0.5 * g * tof, dz / tof);
-      f.dead = false; f.landed = false; f.ttl = 26; f.t = 0; f.claimedBy = null;
+      // A creature needs a good while to finish its last berry before it will take the
+      // next one, so a berry left on the ground has to outlast a full digestion cycle —
+      // otherwise the player's second offer rots in the grass and reads as a bug.
+      f.dead = false; f.landed = false; f.ttl = 70; f.t = 0; f.claimedBy = null; f.intended = null;
       f.spin = 6 + ctx.rng.next() * 4;
       f.root.visible = true;
       f.root.scale.setScalar(1);
@@ -102,6 +105,7 @@ export function createOffering(ctx, { player, world, fx }) {
       f.dead = true;
       f.root.visible = false;
       f.claimedBy = null;
+      f.intended = null;
     },
 
     update(dt) {

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { ORDER } from '../engine/Game.js';
 import { clamp, smoothstep } from './util.js';
 import { createTerrain, buildGroundMesh, buildSkirtGeometry, LAKE, BUTTE, CRAG, AX, AZ, PX, PZ } from './terrain.js';
-import { makeNoiseTexture, makeAerialMaterial, syncAerial } from './materials.js';
+import { makeMaskTexture, makeAerialMaterial, syncAerial, liftVertexAlbedo } from './materials.js';
 import { createGrass, createFlowers, createTrees, createBushes } from './vegetation.js';
 import { createRocks, createRuin, createWater, createLandmarks } from './props.js';
 
@@ -60,31 +60,133 @@ export function createWorld() {
       const segs = c.quality.tier === 'high' ? 420 : 250;
       const geo = buildGroundMesh(c, T, bounds.radius + 40, segs);
 
-      const detailTex = makeNoiseTexture(c.seed ^ 0x51, 256, 6, 4, 0.34, 0x8f8f83, 0xffffff);
-      detailTex.repeat.set((bounds.radius + 40) * 2 / 7.5, (bounds.radius + 40) * 2 / 7.5);
-      const macroTex = makeNoiseTexture(c.seed ^ 0x2711, 128, 4, 3, 0.26, 0x9c9c93, 0xffffff);
-      macroTex.wrapS = macroTex.wrapT = THREE.RepeatWrapping;
+      // ---------------------------------------------------------------------
+      // GROUND MATERIAL
+      //
+      // The ground is 40-70% of every gameplay frame and it used to carry almost no
+      // information: one vertex-interpolated olive, modulated by two monochrome noise
+      // maps. Every material change (soil, rock, sand) happened as a 2.2 m linear ramp
+      // between vertices, which at any sane viewing distance is invisible.
+      //
+      // Now the mesh exports MASKS (worn soil / slope rock / shore sand / grass cover)
+      // and the fragment shader blends real albedos against them, with the transition
+      // edges broken up by four world-space samples of a three-channel noise mask at
+      // 140 m / 23 m / 4.3 m / 1.15 m. Extra rock weight comes from the interpolated
+      // surface normal, so slope drives material directly rather than through a
+      // pre-baked vertex ramp.
+      //
+      // Two rules kept it from turning into sizzle (reference #11 wants "one hero
+      // element, large calm areas"):
+      //   - patch BOUNDARIES are crisp, patch INTERIORS are calm. All the local
+      //     contrast comes from a handful of visible edges per square metre, not from
+      //     a fine grain applied everywhere.
+      //   - the finest octave only modulates value by +/-8% and is faded out past 30 m
+      //     so the mid ground does not shimmer under camera motion.
+      // ---------------------------------------------------------------------
+      const maskTex = makeMaskTexture(c.seed ^ 0x51, 256, [5, 7, 11], 4);
 
       const groundMat = new THREE.MeshLambertMaterial({
-        vertexColors: true, map: detailTex, color: 0xffffff,
+        vertexColors: true, color: 0xffffff,
       });
-      const macroRepeat = { value: 1 / 96 };
       groundMat.onBeforeCompile = (sh) => {
-        sh.uniforms.uMacro = { value: macroTex };
-        sh.uniforms.uMacroScale = macroRepeat;
+        sh.uniforms.uMask = { value: maskTex };
+        // Worn earth, NOT mud. First pass used a saturated 0xc4ab7f and the paths came
+        // back as rust-orange slicks. Measured off pw_11 and pw_15: a trodden path sits
+        // at roughly the same luminance as the grass beside it or a little LIGHTER, and
+        // is close to neutral — the material change reads as a hue/texture break, not as
+        // a colour-blob. Reference #5: the world is desaturated, the creatures are not.
+        sh.uniforms.uSoil = { value: new THREE.Color(0x9c9781).convertSRGBToLinear() };
+        sh.uniforms.uSoilDark = { value: new THREE.Color(0x7d7663).convertSRGBToLinear() };
+        sh.uniforms.uRock = { value: new THREE.Color(0xa9aba0).convertSRGBToLinear() };
+        sh.uniforms.uRockWarm = { value: new THREE.Color(0xb6af9a).convertSRGBToLinear() };
+        sh.uniforms.uSand = { value: new THREE.Color(0xd6c8a2).convertSRGBToLinear() };
+        // average albedo of the instanced blade carpet — the terrain fades into this
+        // over the same band the blades fade out in, so the grass radius has no edge
+        sh.uniforms.uCanopy = { value: new THREE.Color(0xbcc785).convertSRGBToLinear() };
         sh.vertexShader = sh.vertexShader
-          .replace('#include <common>', '#include <common>\nvarying vec3 vGW;')
-          .replace('#include <begin_vertex>', '#include <begin_vertex>\n vGW = (modelMatrix * vec4(transformed,1.0)).xyz;');
+          .replace('#include <common>', `#include <common>
+            attribute vec4 aMask;
+            varying vec4 vGMask; varying vec3 vGW; varying vec3 vGN;`)
+          .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
+            vGN = normalize(mat3(modelMatrix) * objectNormal);`)
+          .replace('#include <begin_vertex>', `#include <begin_vertex>
+            vGW = (modelMatrix * vec4(transformed,1.0)).xyz;
+            vGMask = aMask;`);
         sh.fragmentShader = sh.fragmentShader
-          .replace('#include <common>', '#include <common>\nuniform sampler2D uMacro;\nuniform float uMacroScale;\nvarying vec3 vGW;')
-          .replace('#include <map_fragment>', `#include <map_fragment>
+          .replace('#include <common>', `#include <common>
+            uniform sampler2D uMask;
+            uniform vec3 uSoil, uSoilDark, uRock, uRockWarm, uSand, uCanopy;
+            varying vec4 vGMask; varying vec3 vGW; varying vec3 vGN;
+            vec2 rot2g(vec2 p, float a) { float c = cos(a), s = sin(a); return vec2(c*p.x - s*p.y, s*p.x + c*p.y); }`)
+          .replace('#include <color_fragment>', `#include <color_fragment>
             {
-              vec3 m = texture2D(uMacro, vGW.xz * uMacroScale).rgb;
-              float mm = dot(m, vec3(0.333));
-              diffuseColor.rgb *= (0.80 + 0.40 * mm);
+              vec2 w = vGW.xz;
+              // four scales, each rotated by a different angle so the 256px tile never
+              // lines up with itself across octaves
+              vec3 nM = texture2D(uMask, rot2g(w, 0.31) * 0.00714).rgb;   // ~140 m
+              vec3 nA = texture2D(uMask, rot2g(w, 1.17) * 0.04350).rgb;   // ~23 m
+              vec3 nB = texture2D(uMask, rot2g(w, 2.42) * 0.23260).rgb;   // ~4.3 m
+              vec3 nC = texture2D(uMask, rot2g(w, 0.83) * 0.86960).rgb;   // ~1.15 m
+
+              float dist = length(vGW - cameraPosition);
+              float nearAmt = 1.0 - smoothstep(14.0, 42.0, dist);
+              float slope = 1.0 - clamp(normalize(vGN).y, 0.0, 1.0);
+
+              // ---- layer 1: living grass ----------------------------------
+              vec3 grass = diffuseColor.rgb;
+              // clumping: lush dark tussocks against drier straw. This is the term the
+              // frames were missing entirely -- a real meadow changes value every metre
+              // or two, ours changed every eighty.
+              float clump = nB.g * 0.60 + nA.b * 0.40;
+              grass *= 0.79 + 0.44 * clump;
+              float straw = smoothstep(0.48, 0.86, nB.r * 0.65 + nA.r * 0.35 + (1.0 - vGMask.w) * 0.22);
+              grass = mix(grass, grass * vec3(1.20, 1.04, 0.58), straw * 0.66);
+              float deep = smoothstep(0.54, 0.14, nA.g * 0.7 + nB.b * 0.3);
+              grass = mix(grass, grass * vec3(0.70, 0.90, 0.70), deep * 0.58);
+
+              // ---- layer 2: worn / trodden soil ----------------------------
+              vec3 soil = mix(uSoilDark, uSoil, clamp(nB.b * 0.7 + nC.r * 0.3, 0.0, 1.0));
+              soil *= 0.90 + 0.20 * nA.b;
+
+              // ---- layer 3: exposed rock -----------------------------------
+              vec3 rock = mix(uRock, uRockWarm, nA.r) * (0.80 + 0.40 * nB.b);
+
+              // ---- weights, with noise-broken edges ------------------------
+              float soilW = vGMask.x * 1.05 + smoothstep(0.76, 0.97, nA.b * 0.55 + nM.r * 0.45) * 0.55;
+              soilW = smoothstep(0.34, 0.74, soilW + (nB.r - 0.5) * 0.42 + (nC.g - 0.5) * 0.18);
+              soilW *= 1.0 - vGMask.z * 0.7;
+
+              float rockW = vGMask.y * 1.15 + smoothstep(0.34, 0.72, slope) * 0.70;
+              rockW = smoothstep(0.36, 0.78, rockW + (nA.r - 0.5) * 0.45 + (nB.g - 0.5) * 0.22);
+              // scattered gravel where nothing grows, so bare ground is never one colour
+              rockW = max(rockW, smoothstep(0.88, 0.98, nB.b) * 0.55 * (1.0 - vGMask.w));
+
+              // never a full handover — real worn ground keeps stubble in it, and a
+              // 100% soil patch reads as a decal stuck on the meadow
+              vec3 col = mix(grass, soil, soilW * 0.82);
+              col = mix(col, rock, rockW);
+              col = mix(col, uSand * (0.88 + 0.24 * nB.r), vGMask.z * 0.88);
+
+              // ---- large-scale value: light and dark sweeps across the meadow
+              // (pw_11 and pw_15 both read as broad soft shadow shapes over the grass)
+              col *= 0.82 + 0.36 * (nM.g * 0.55 + nA.g * 0.45);
+              // ---- finest grain, near field only, deliberately small --------
+              col *= 1.0 + (nC.b - 0.5) * 0.16 * nearAmt;
+
+              // ---- fade the bare terrain into the blade carpet's own colour -
+              // The instanced blades stop at a fixed radius. Against an untinted
+              // backing plane that produced a visible RING in the wide shot and a hard
+              // horizontal BAND SEAM in the over-shoulder. Pushing the ground toward
+              // the carpet's average albedo over the same distance band removes the
+              // handoff instead of hiding it.
+              float far = smoothstep(26.0, 140.0, dist);
+              vec3 canopy = mix(col, uCanopy, 0.58) * (0.88 + 0.26 * (nB.g * 0.6 + nA.b * 0.4));
+              col = mix(col, canopy, far * vGMask.w * 0.85);
+
+              diffuseColor.rgb = col;
             }`);
       };
-      groundMat.customProgramCacheKey = () => 'groundmat';
+      groundMat.customProgramCacheKey = () => 'groundmat2';
 
       ground = new THREE.Mesh(geo, groundMat);
       ground.receiveShadow = true;
@@ -95,7 +197,7 @@ export function createWorld() {
       // ---------------------------------------------------------- horizon skirt
       const skirtMat = makeAerialMaterial({ color: 0x94a08c, maxHaze: 0.90, desat: 0.62 });
       aerialMats.push(skirtMat);
-      skirt = new THREE.Mesh(buildSkirtGeometry(T, bounds.radius + 30, 3000, 26, 96), skirtMat);
+      skirt = new THREE.Mesh(buildSkirtGeometry(c, T, bounds.radius + 30, 3000, 26, 96), skirtMat);
       skirt.frustumCulled = false;
       skirt.name = 'horizon';
       c.scene.add(skirt);
@@ -119,7 +221,11 @@ export function createWorld() {
       counts.bushes = bushes.count;
 
       const rocks = createRocks(c, T, rng.fork(67));
-      for (const m of rocks.meshes) c.scene.add(m);
+      // see liftVertexAlbedo: the rock builder double-converts its palette to linear, so
+      // every stone in the world was rendering at roughly a sixth of the albedo a grey
+      // rock has. 4.6 puts lit stone at ~0.16 linear (renders ~158/255 in full sun,
+      // which is where the reference plates' rock sits) without blowing the highlights.
+      for (const m of rocks.meshes) { liftVertexAlbedo(m.geometry, 4.6); c.scene.add(m); }
       counts.rocks = rocks.count;
 
       const flowers = createFlowers(c, T, rng.fork(79));
