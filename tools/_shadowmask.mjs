@@ -76,7 +76,7 @@ for (const shot of ['over', 'vista']) {
     await page.evaluate(`(${SETUP.toString()})(${JSON.stringify(shot)})`);
     await page.evaluate(`(${MASKMODE.toString()})(${JSON.stringify(opts)})`);
     const f = path.join(OUT, `mask_${shot}_${name}.png`);
-    await page.screenshot({ path: f });
+    await page.screenshot({ path: f, timeout: 120000 });
     // how much of the frame is shadowed?
     const stat = await page.evaluate(() => {
       const cv = document.querySelector('#app canvas');

@@ -166,13 +166,13 @@ const call = (fn, arg) => page.evaluate(`(${fn.toString()})(${arg === undefined 
 async function scenario(opts, stills = false) {
   await boot();
   const setup = await call(SETUP, opts);
-  if (stills) await page.screenshot({ path: path.join(OUT, 'aim.png'), animations: 'disabled' });
+  if (stills) await page.screenshot({ path: path.join(OUT, 'aim.png'), animations: 'disabled', timeout: 120000 });
   const pull = await call(TO_PULLIN);
-  if (stills) await page.screenshot({ path: path.join(OUT, 'pullin.png'), animations: 'disabled' });
+  if (stills) await page.screenshot({ path: path.join(OUT, 'pullin.png'), animations: 'disabled', timeout: 120000 });
   const wob = await call(TO_WOBBLE);
-  if (stills) await page.screenshot({ path: path.join(OUT, 'wobble.png'), animations: 'disabled' });
+  if (stills) await page.screenshot({ path: path.join(OUT, 'wobble.png'), animations: 'disabled', timeout: 120000 });
   const done = await call(FINISH);
-  if (stills) await page.screenshot({ path: path.join(OUT, 'after.png'), animations: 'disabled' });
+  if (stills) await page.screenshot({ path: path.join(OUT, 'after.png'), animations: 'disabled', timeout: 120000 });
   return { ...done, aim: setup.spheres, equipped: setup.equipped, pullPhase: pull.active[0]?.phase ?? null,
     wobPhase: wob.active[0]?.phase ?? null };
 }

@@ -232,7 +232,7 @@ const PART3 = () => {
 };
 
 const p3 = await page.evaluate(`(${PART3.toString()})()`);
-await page.screenshot({ path: path.join(OUT, 'burst_overshoulder.png'), animations: 'disabled' });
+await page.screenshot({ path: path.join(OUT, 'burst_overshoulder.png'), animations: 'disabled', timeout: 120000 });
 
 /**
  * PART 3b — put the gun away and check it costs nothing.

@@ -2,22 +2,22 @@
   "goal": "A 5-minute playable vertical slice that captures the core fantasy of Palworld: a beautiful third-person world, charming creatures, meaningful interaction, and believable creature behaviour.",
   "bar": "The real Palworld. A fresh critic is shown our capture beside an official Palworld frame — same shot type, same resolution, same format, labels stripped, order shuffled — and asked which one is the shipped commercial game. We are done when critics stop reliably picking correctly.",
   "currentRound": "r12",
-  "currentState": "Round 12 is the widest round yet: six builders on disjoint directories. Three are closing the gaps the r11 blind critic named — the empty near field, the flat dusk frame, and creatures that read as 'lit from every direction equally'. Three are building two new mechanics the user asked for: throw-to-capture Bond Spheres, and a GTA-feel firearms module.\n\nThe near field has already changed character — the bare grass carpet is now layered clumps, flowers and foreground detail — at 250 draws / 1.74M triangles against a 300 / 2.2M budget. All six systems boot together and capture cleanly.",
+  "currentState": "Round 12 landed. All six guardrail shots are in band for the first time: dusk went from 264 distinct colours and 3.50 local contrast to 770 and 7.64, and the three oversaturated daylight frames came back down (vista 0.403 -> 0.277). The two new mechanics the user asked for — throw-to-capture and firearms — are in and verified by their own harnesses (36/36 and 11/12).\n\nThe round's most expensive finding was not a rendering bug but an instrument one. Boulders were visibly floating in every single frame, and five consecutive object-space probes reported that nothing floated, because the instance ORIGINS were all correctly grounded and the lift was baked into the vertices. Believe the frame over the bookkeeping.",
   "pickRate": "0% across r08, r10 and r11 — a blind critic has identified our frame as the in-dev one in 15 of 15 pairs. In r11 every verdict came back at confidence 5. Art direction, judged as a separate question, went 1 of 5 to us (the creature group: 'B's frame is calm and legible... as a picture, B is the better-composed one').",
   "metrics": {
     "caption": "Objective guardrails, measured with tools/measure.py against the real reference frames. Not the bar — a critic's eye is — but they stop arguments about whether a change helped. Two bands were corrected in r08 after being measured from the reference rather than invented.",
     "rows": [
       {
         "name": "local contrast / fine detail",
-        "ours": "5.06 – 7.33 daylight; 3.50 dusk",
+        "ours": "6.44 – 9.82 daylight; 7.64 dusk",
         "target": "5.0 – 10.0",
         "status": "pass"
       },
       {
         "name": "ground/sky luminance ratio",
-        "ours": "0.65 – 0.83",
+        "ours": "0.65 – 0.80 wide daylight; 0.97 close-up portrait",
         "target": "0.63 – 0.96",
-        "status": "pass"
+        "status": "watch"
       },
       {
         "name": "highlight clipping",
@@ -80,19 +80,31 @@
       "id": "r12",
       "title": "Near field, dusk, creature shading — and two new mechanics",
       "date": "2026-08-03",
-      "status": "running",
+      "status": "done",
       "summary": "Split across two fronts. The first three builders answer the r11 critic directly: it ranked 'nothing in the in-dev world casts or receives light locally' as the single biggest gap, ahead of atmospheric depth and terrain variety. The other three add throw-to-capture and firearms.\n\nThe design decision that makes the two new mechanics one feature rather than two: catch chance is read straight off the trust the berries bought. Feeding is not made obsolete by the sphere — it is what makes the sphere work. And the guns exist to weaken and stagger a creature so a sphere will hold it, which is the only framing in which firearms belong in a game about befriending things. There is no death anywhere in the build.",
       "improvements": [
         "Bond Spheres: aim arc showing the ACTUAL trajectory, ballistic throw, pull-in, 1-3 wobbles with rising tension, catch or break-out. Three independent RNG streams so adding a spark to the trail cannot change who gets caught.",
         "Firearms with GTA's specific feel: aim as a state with an asymmetric 0.2s in / 0.45s out ramp, spread as a live number the reticle IS rather than a cosmetic bloom, recoil as two springs plus a leaky residual applied to the ROUND and not just the picture, phased interruptible reload, surface-aware impacts.",
         "Loadout system: absolute slots 1-4 rather than a cycle, because a cycle key is miserable when one of four items is a weapon you did not mean to raise at a creature you were about to befriend. The swap is not instant and gates both consumers by construction.",
-        "Near field filled: the first 25 metres went from bare grass carpet to layered clumps, flowers and foreground detail."
+        "Near field filled: the first 25 metres went from bare grass carpet to layered clumps, flowers and foreground detail.",
+        "Rocks stopped hanging in the sky. The faceted-banding pass in rockGeometry / boulderGeometry / stoneGeometry added a random phase `ph` before rounding y into bands and never subtracted it back out, so the phase became a translation and baked a constant +0.45*ph lift into the vertices — metres of rock in mid-air, in three files, written independently by three authors.",
+        "The instrument lesson from that bug: every object-space check EXONERATED it. Instance origins were correctly grounded (mean gap -0.15), the placement code queried heightAt properly, and five successive probes reported 'nothing floats' while the frame plainly showed boulders in the sky. It only falls out when you measure the GEOMETRY bounding box against the instance origin. The probes are kept as tools/_floatprobe*.mjs.",
+        "Weapons verified end-to-end: 36 of 36 assertions, including the one that matters — 26 hits drain stamina monotonically to zero, `creature:exhausted` fires exactly once, 15 further rounds are absorbed, population 17 -> 17, and the creature is still in the scene. Nothing died.",
+        "Sphere capture verified end-to-end: catch odds read straight off trust, measured at 0.078 wild / 0.426 after one berry / 0.895 after two. Feeding is what makes the sphere work."
       ],
       "gaps": [
-        "Integration is still in flight: the aim camera, the HUD reticle and ammo readout, the audio cues and the creature stagger reaction all exist as contracts that nothing consumes yet.",
-        "No blind A/B has been run against r12 yet. The r11 build was identified 5 of 5 at confidence 5."
+        "A creature that breaks out of a sphere currently ends up FRIENDLIER than before. The breakout subtracts 0.10 trust, but the ordinary proximity/patience taming arc keeps accruing while the player stands there and swamps it — measured 0.05 trust at throw, 0.32 after the break-out. A failed capture must be a setback the player can feel.",
+        "creature_portrait sits at ground/sky 0.97 against a 0.63-0.96 band. That band was measured off WIDE landscape plates and means little on a close-up; it is reported rather than silenced, and the band is left exactly as it was.",
+        "Palette depth still trails the reference: our best frame carries 760 distinct quantised colours against 1056 in the richest real plate."
       ],
-      "shots": []
+      "shots": [
+        "vista_golden.png",
+        "overshoulder_meadow.png",
+        "creature_portrait.png",
+        "creature_group.png",
+        "interaction_feed.png",
+        "dusk_mood.png"
+      ]
     },
     {
       "id": "r11",

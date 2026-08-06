@@ -87,14 +87,14 @@ await page.evaluate(() => {
   g.scene.environmentIntensity = 0.0;
   window.__game.render();
 });
-await page.screenshot({ path: path.join(OUT, 'keyonly_shadows_on.png') });
+await page.screenshot({ path: path.join(OUT, 'keyonly_shadows_on.png'), timeout: 120000 });
 await page.evaluate(() => {
   const g = window.__game.internals;
   g.renderer.shadowMap.enabled = false;
   g.scene.traverse((o) => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => { m.needsUpdate = true; }); });
   window.__game.render();
 });
-await page.screenshot({ path: path.join(OUT, 'keyonly_shadows_off.png') });
+await page.screenshot({ path: path.join(OUT, 'keyonly_shadows_off.png'), timeout: 120000 });
 
 console.log('\nwrote', OUT);
 await browser.close();
