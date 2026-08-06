@@ -200,6 +200,36 @@ for (const nm of ['gatherBush', 'gatherBerry', 'gatherRock', 'gatherBranch']) {
   console.log(`  ${nm}: ${px} visible px (${(100 * px / (before.w * before.h)).toFixed(2)}% of frame), rows ${minR}..${maxR}`);
 }
 
+/* ---------- what did the hook actually inject? ---------- */
+const dump = await page.evaluate(() => {
+  let out = null;
+  window.__game.internals.scene.traverse((o) => {
+    if (o.isMesh && o.name === 'gatherBush' && !out) {
+      const m = o.material;
+      const orig = m.onBeforeCompile;
+      m.onBeforeCompile = function (sh, r) { orig.call(this, sh, r); window.__dump = { v: sh.vertexShader, f: sh.fragmentShader }; };
+      m.customProgramCacheKey = () => 'dumpkey';
+      m.needsUpdate = true;
+      window.__game.render();
+      m.onBeforeCompile = orig;
+      m.needsUpdate = true;
+      window.__game.render();
+      const d = window.__dump || {};
+      const fi = (d.f || '').indexOf('emissivemap_fragment');
+      out = {
+        vertexHasHook: /vCH = cwp_/.test(d.v || ''),
+        vertexHasInstancing: /USE_INSTANCING/.test(d.v || ''),
+        fragHasVarying: /varying float vCH/.test(d.f || ''),
+        fragHasBand: /0\.4600/.test(d.f || ''),
+        fragAround: fi >= 0 ? (d.f || '').slice(fi - 30, fi + 260) : 'NO emissivemap_fragment IN FRAGMENT SHADER',
+      };
+    }
+  });
+  return out;
+});
+console.log('--- compiled shader ------------------------------------------------');
+console.log(JSON.stringify(dump, null, 1));
+
 /* ---------- control: does ANY shader hook reach this material? ---------- */
 // "the band moved 57 px" and "onBeforeCompile never ran on this material" produce the
 // same pixels. Force a flat 50% multiply on the whole prop and count.
