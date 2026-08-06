@@ -16,9 +16,16 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
  * front sight and a visible orange charging handle read at 40 px in a third-person
  * frame, which is the only size any of this is ever seen at.
  *
- * Two named empties come back with the model:
+ * Four named empties come back with the model:
  *   muzzle — where flash, smoke and the tracer's first metre are born
  *   eject  — where the case leaves, on the right side of the receiver
+ *   grip   — where the firing hand's WRIST goes, so src/player can IK the right arm
+ *            onto it. It sits ~3.5 cm above the grip's centreline because the hand
+ *            group's origin is the wrist and the fist mesh hangs below it; targeting
+ *            the grip centre directly buries the gun inside the fist.
+ *   fore   — the nearest acceptable support-hand wrist, at the magwell. The support
+ *            hand slides forward from here along the bore by up to `slide` metres,
+ *            as far as the left arm can actually reach (see src/player/Animator.js).
  */
 
 // Deliberately much lighter than a real gunmetal. There is no environment map in this
@@ -124,8 +131,18 @@ function rifleParts() {
 }
 
 const LAYOUT = {
-  pistol: { parts: pistolParts, muzzle: [0, 0.062, -0.182], eject: [0.045, 0.074, -0.028], scale: 1.0 },
-  rifle: { parts: rifleParts, muzzle: [0, 0.066, -0.580], eject: [0.052, 0.082, -0.040], scale: 1.0 },
+  pistol: {
+    parts: pistolParts, scale: 1.0,
+    muzzle: [0, 0.062, -0.182], eject: [0.045, 0.074, -0.028],
+    // a pistol is held in a thumbs-forward cup: the support wrist is barely 4 cm from
+    // the firing wrist and has almost nowhere to slide to
+    grip: [0, 0.014, 0.028], fore: [-0.036, -0.014, 0.014], slide: 0.03,
+  },
+  rifle: {
+    parts: rifleParts, scale: 1.0,
+    muzzle: [0, 0.066, -0.580], eject: [0.052, 0.082, -0.040],
+    grip: [0, 0.026, 0.050], fore: [0, 0.030, -0.050], slide: 0.30,
+  },
 };
 
 /**
@@ -165,5 +182,16 @@ export function buildWeaponModel(id) {
   eject.position.fromArray(layout.eject);
   group.add(eject);
 
-  return { group, mesh, mat, muzzle, eject, triangles: geo.index ? geo.index.count / 3 : geo.attributes.position.count / 3 };
+  const grip = new THREE.Object3D();
+  grip.position.fromArray(layout.grip);
+  group.add(grip);
+
+  const fore = new THREE.Object3D();
+  fore.position.fromArray(layout.fore);
+  group.add(fore);
+
+  return {
+    group, mesh, mat, muzzle, eject, grip, fore, slide: layout.slide,
+    triangles: geo.index ? geo.index.count / 3 : geo.attributes.position.count / 3,
+  };
 }

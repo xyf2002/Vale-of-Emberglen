@@ -46,6 +46,18 @@ const PAL = {
   eye: 0x241c18,
   berry: 0xbe3a2f,
   leaf: 0x5c8a3a,
+  // Nord kit (r14): horned iron helm + fur mantle.
+  // The first pass had the helm at 0x5b616b, which is the same value AND the same
+  // blue-grey family as the jacket (0x333c52) — under a blue sky key the two merged
+  // into one shape and the helmet stopped reading as metal at all. Steel has to be
+  // lighter than the cloth it sits on and pulled off the cloth's hue.
+  iron: 0x7d8189,
+  ironDark: 0x4c515a,
+  horn: 0xcfc3a6,
+  fur: 0x5a4a3c,
+  // darker and less saturated than the hair: at 0x9c4a2c the beard read as a red bib
+  // hanging off the chin rather than as hair in the helm's shade
+  beard: 0x7c3a22,
 };
 
 /* ------------------------------------------------------------------ geometry */
@@ -142,6 +154,60 @@ function roundedBox(w, h, d, r, seg = 4) {
   return g;
 }
 
+/**
+ * A tapered, ridged horn swept along a curve.
+ *
+ * TubeGeometry would give the sweep but only at a constant radius, and a horn is
+ * almost entirely defined by its taper — a constant-radius tube reads as a pipe glued
+ * to the helmet. So the rings are laid out by hand on the curve's Frenet frames:
+ * radius falls off with a slight ease so the base stays thick and the last third
+ * needles, and a low-frequency ripple along the length gives the growth ridges that
+ * catch the key light and stop the horn reading as smooth plastic.
+ *
+ * @param pts    control points in head space; the curve passes through them.
+ * @param rBase  radius at pts[0], @param rTip radius at the last point.
+ */
+function horn(pts, rBase, rTip, { seg = 26, radial = 9, ridges = 9, ridgeAmt = 0.075, flat = 0.86 } = {}) {
+  const curve = new THREE.CatmullRomCurve3(pts.map(p => new THREE.Vector3(...p)));
+  const frames = curve.computeFrenetFrames(seg, false);
+  const pos = new Float32Array((seg + 1) * (radial + 1) * 3);
+  const uv = new Float32Array((seg + 1) * (radial + 1) * 2);
+  const idx = [];
+  const P = new THREE.Vector3();
+  let o = 0;
+  for (let i = 0; i <= seg; i++) {
+    const t = i / seg;
+    curve.getPointAt(t, P);
+    const N = frames.normals[i], B = frames.binormals[i];
+    // ease the taper: thick shank, fast needle at the end
+    const r = (rBase + (rTip - rBase) * (t * t * 0.55 + t * 0.45))
+      * (1 + Math.sin(t * ridges * Math.PI * 2) * ridgeAmt * (1 - t));
+    for (let j = 0; j <= radial; j++) {
+      const a = (j / radial) * Math.PI * 2;
+      const cx = Math.cos(a) * r, cy = Math.sin(a) * r * flat;   // ovalised cross-section
+      pos[o * 3] = P.x + N.x * cx + B.x * cy;
+      pos[o * 3 + 1] = P.y + N.y * cx + B.y * cy;
+      pos[o * 3 + 2] = P.z + N.z * cx + B.z * cy;
+      uv[o * 2] = j / radial;
+      uv[o * 2 + 1] = t;
+      o++;
+    }
+  }
+  const row = radial + 1;
+  for (let i = 0; i < seg; i++) {
+    for (let j = 0; j < radial; j++) {
+      const a = i * row + j, b = a + row;
+      idx.push(a, b, a + 1, b, b + 1, a + 1);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
 /* ------------------------------------------------------------------ material */
 
 /**
@@ -228,6 +294,17 @@ export function buildAvatar(rng) {
     scarf: mat(PAL.scarf, 0.9, { side: THREE.DoubleSide }),
     dark: mat(PAL.eye, 0.5),
     berry: mat(PAL.berry, 0.42),
+    // scene.environment is a PMREM of the sky at environmentIntensity 0.30 (see
+    // src/sky/index.js), so a fully metallic helm has almost nothing to reflect and
+    // renders near-black. 0.38 keeps the specular roll along the dome and the brow
+    // band while leaving enough diffuse for the key to model the shape.
+    iron: mat(PAL.iron, 0.44, { metalness: 0.38 }),
+    ironDark: mat(PAL.ironDark, 0.55, { metalness: 0.30 }),
+    horn: mat(PAL.horn, 0.66),
+    // DoubleSide: the mantle is an open sweep with two cut edges, and from a side
+    // camera you look straight into them.
+    fur: mat(PAL.fur, 0.96, { side: THREE.DoubleSide }),
+    beard: mat(PAL.beard, 0.85),
   };
 
   const root = new THREE.Group();
@@ -327,9 +404,53 @@ export function buildAvatar(rng) {
   ]);
   add(chest, strapGeo, mats.strap);
 
-  // scarf ring at the collar
+  // fur mantle over the shoulders. A lathe ring with a per-vertex noise push: the
+  // silhouette has to be ragged or it reads as a rubber donut, and the push is done on
+  // the geometry rather than in a shader so it costs nothing at runtime and stays
+  // byte-identical per seed.
+  {
+    // Two rules this shape had to learn the hard way:
+    //
+    // 1. The profile MUST be monotone in y and run bottom-to-top. A LatheGeometry winds
+    //    strictly along the profile, so a folded or top-down profile sweeps surface that
+    //    faces inwards: the first pass closed the underside by folding back up, and the
+    //    returning leg lit off backfaces — a pale flat shelf, not dark fur. The
+    //    underside is never visible from a playable camera, so leave it open.
+    // 2. It has to clear the deltoids (x 0.176 + r 0.078 = 0.254) or it is invisible.
+    //    At the first pass's 0.244 it sat *under* the shoulder caps and simply never
+    //    appeared in any of the five probe framings.
+    //
+    // The sweep stops 47 degrees short of the back on each side so the bedroll and pack
+    // (z -0.11 to -0.26) sit in a gap rather than intersecting the pelt. From directly
+    // behind you see the two cut edges flanking the pack, which is what a pelt worn
+    // under a pack strap does anyway.
+    // 40 segments, not 24: at 24 the noise below had one sample every 15 degrees of hem,
+    // which is coarser than the wobble it is trying to describe, so the pelt came back
+    // smooth — a leather cape, not fur.
+    const ruff = new THREE.LatheGeometry([
+      [0.258, -0.040], [0.259, -0.022], [0.250, -0.004], [0.232, 0.018],
+      [0.206, 0.040], [0.178, 0.060], [0.148, 0.082],
+    ].map(([r, y]) => new THREE.Vector2(r, y)), 40, -Math.PI * 0.74, Math.PI * 1.48);
+    ruff.scale(1.04, 1, 0.90);
+    const p = ruff.attributes.position;
+    const v = new THREE.Vector3();
+    for (let i = 0; i < p.count; i++) {
+      v.fromBufferAttribute(p, i);
+      // two octaves: the coarse one breaks the hem line, the fine one gives the shading
+      // enough variation that the pelt does not read as moulded plastic
+      const n = Math.sin(v.x * 46.0 + v.y * 9.0) * Math.cos(v.z * 39.0 - v.y * 11.0)
+        + 0.55 * Math.sin(v.x * 121.0 - v.z * 97.0) * Math.cos(v.z * 109.0 + v.y * 23.0);
+      const outer = THREE.MathUtils.smoothstep(Math.hypot(v.x, v.z), 0.14, 0.23);
+      p.setXYZ(i, v.x * (1 + n * 0.10 * outer), v.y + n * 0.034 * outer, v.z * (1 + n * 0.10 * outer));
+    }
+    ruff.computeVertexNormals();
+    add(chest, merge([{ geo: ruff, m: M(0, 0.168, -0.010) }]), mats.fur);
+  }
+
+  // Scarf ring at the collar — now a thin band tucked under the mantle. At the r13
+  // radius it sat directly below the helm's chin line and read as a wide red grin.
   const scarfRing = merge([
-    { geo: new THREE.TorusGeometry(0.082, 0.030, 7, 18), m: M(0, 0.268, -0.005, Math.PI / 2, 0, 0, 1.05, 1, 0.9) },
+    { geo: new THREE.TorusGeometry(0.073, 0.021, 7, 18), m: M(0, 0.244, -0.005, Math.PI / 2, 0, 0, 1.05, 1, 0.9) },
   ]);
   add(chest, scarfRing, mats.scarf);
 
@@ -362,50 +483,115 @@ export function buildAvatar(rng) {
   ]);
   add(head, skullGeo, mats.skin);
 
-  // flat-graphic eyes + brows (reference note #3 — drawn, not modelled)
+  // flat-graphic eyes + brows (reference note #3 — drawn, not modelled). Both sit lower
+  // than on the r13 avatar: the helm's brow band occupies y 0.028-0.070, and anything
+  // above that line is inside the steel.
   const faceGeo = merge([
-    { geo: new THREE.SphereGeometry(0.026, 10, 8), m: M(0.043, -0.006, 0.098, 0, 0, 0, 1, 1.25, 0.30) },
-    { geo: new THREE.SphereGeometry(0.026, 10, 8), m: M(-0.043, -0.006, 0.098, 0, 0, 0, 1, 1.25, 0.30) },
-    { geo: roundedBox(0.046, 0.011, 0.012, 0.005, 2), m: M(0.045, 0.040, 0.096, 0, 0, -0.16) },
-    { geo: roundedBox(0.046, 0.011, 0.012, 0.005, 2), m: M(-0.045, 0.040, 0.096, 0, 0, 0.16) },
+    { geo: new THREE.SphereGeometry(0.021, 10, 8), m: M(0.041, -0.020, 0.099, 0, 0, 0, 1, 1.15, 0.30) },
+    { geo: new THREE.SphereGeometry(0.021, 10, 8), m: M(-0.041, -0.020, 0.099, 0, 0, 0, 1, 1.15, 0.30) },
+    { geo: roundedBox(0.044, 0.010, 0.012, 0.005, 2), m: M(0.043, 0.012, 0.098, 0, 0, -0.20) },
+    { geo: roundedBox(0.044, 0.010, 0.012, 0.005, 2), m: M(-0.043, 0.012, 0.098, 0, 0, 0.20) },
   ]);
   add(head, faceGeo, mats.dark);
 
-  // hair: a displaced cap plus spikes that overshoot the skull
-  const capGeo = new THREE.SphereGeometry(0.121, 18, 14, 0, Math.PI * 2, 0, Math.PI * 0.62);
-  {
-    const p = capGeo.attributes.position;
-    const v = new THREE.Vector3();
-    for (let i = 0; i < p.count; i++) {
-      v.fromBufferAttribute(p, i);
-      const n = Math.sin(v.x * 41.0) * Math.cos(v.z * 37.0 + v.y * 13.0);
-      v.multiplyScalar(1 + n * 0.075);
-      p.setXYZ(i, v.x, v.y, v.z);
-    }
-    capGeo.computeVertexNormals();
-  }
-  const spikes = [{ geo: capGeo, m: M(0, 0.012, -0.006, 0, 0, 0, 1.02, 1.0, 1.06) }];
+  // ---- horned iron helm ------------------------------------------------
+  //
+  // The avatar is seen from behind at 2-4 m nearly all the time, so a helmet earns its
+  // budget only if it changes the SILHOUETTE from that angle — a smooth dome does not,
+  // it just replaces one round shape with another. What reads at 3 m from behind is the
+  // pair of horns breaking the head's outline sideways and the neck guard flaring over
+  // the collar, so those get the vertices; the face-side detail (nose guard, cheek
+  // plates, rivets) is cheap and only pays off in the dialogue/idle framings.
+  const helmGeo = merge([
+    // dome: sits a few mm proud of the 0.108 skull, open at the back for the neck flare
+    { geo: lathe([
+      [0.121, 0.028], [0.126, 0.055], [0.124, 0.086], [0.112, 0.112],
+      [0.086, 0.132], [0.046, 0.146], [0.0, 0.150],
+    ], 20), m: M(0, 0.004, -0.006, 0, 0, 0, 1.02, 1.0, 1.06) },
+    // brow band — the heavy forged ring the horns and the nose guard hang off
+    { geo: new THREE.TorusGeometry(0.122, 0.0215, 7, 22), m: M(0, 0.049, -0.006, Math.PI / 2, 0, 0, 1.02, 1, 1.06) },
+    // Nose guard down the centre line. The first pass had it 34 mm wide and the cheek
+    // plates 36 mm wide sitting at z 0.056 — three vertical slabs across a 21 cm face,
+    // which left two isolated slots of skin and read as a mask, not a helmet. The rule
+    // that fixed it: the face opening has to be wider than every bar crossing it.
+    { geo: roundedBox(0.024, 0.088, 0.028, 0.010, 3), m: M(0, -0.004, 0.104, 0.16, 0, 0) },
+    // (the cheek plates are in the darker merge below — at helm value they rounded up
+    // into a pale puck over each ear and read as a headphone)
+    // Neck guard: a HALF lathe over the back of the skull only.
+    //
+    // The first pass used a full lathe squashed to 0.62 in z so it would not cover the
+    // face — which put its back wall at z -0.085, i.e. *inside* the 0.108 skull, so it
+    // rendered nothing at all and the back of the head was a bare skin ball under the
+    // dome from every following-camera angle. LatheGeometry takes phiStart/phiLength
+    // (phi 0 is +Z, phi PI is -Z), so the back half can be swept directly at full
+    // radius instead of scaling a full ring down until it disappears.
+    // Points run BOTTOM TO TOP. A lathe's normals follow the profile direction, so a
+    // top-down profile sweeps a surface facing inwards — it renders only backfaces and
+    // is invisible from outside, which is the second time this shape has vanished
+    // (see the mantle in the chest block for the first).
+    { geo: new THREE.LatheGeometry(
+      [[0.092, -0.092], [0.116, -0.074], [0.130, -0.046], [0.132, -0.010], [0.122, 0.030]]
+        .map(([r, y]) => new THREE.Vector2(r, y)), 16, Math.PI * 0.52, Math.PI * 0.96),
+      m: M(0, 0.026, -0.008, 0.14, 0, 0) },
+  ]);
+  add(head, helmGeo, mats.iron);
+
+  // rivets + horn sockets, one shade darker so the band does not read as one slab
+  const rivets = [];
   for (let i = 0; i < 9; i++) {
-    const a = rng.range(-2.55, 2.55);           // biased to the back/sides
-    const el = rng.range(0.15, 1.05);
-    const r = 0.108;
-    const px = Math.sin(a) * Math.cos(el) * r;
-    const pz = -Math.cos(a) * Math.cos(el) * r;
-    const py = Math.sin(el) * r * 1.05 + 0.012;
-    const len = rng.range(0.075, 0.145);
-    const dir = new THREE.Vector3(px, py * 0.6 + 0.04, pz).normalize();
-    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-    const m = new THREE.Matrix4().compose(
-      new THREE.Vector3(px, py, pz), q, new THREE.Vector3(1, 1, 1));
-    const cone = new THREE.ConeGeometry(rng.range(0.026, 0.042), len, 6);
-    cone.translate(0, len * 0.34, 0);
-    spikes.push({ geo: cone, m });
+    const a = -1.15 + (i / 8) * 2.30;                 // front arc only
+    rivets.push({ geo: new THREE.SphereGeometry(0.011, 6, 5),
+      m: M(Math.sin(a) * 0.126, 0.049, Math.cos(a) * 0.130) });
   }
-  // nape tuft
-  const tuft = new THREE.ConeGeometry(0.052, 0.15, 7);
-  tuft.translate(0, -0.055, 0);
-  spikes.push({ geo: tuft, m: M(0, -0.045, -0.088, 0.55, 0, 0) });
-  add(head, merge(spikes), mats.hair);
+  for (const s of [1, -1]) {
+    rivets.push({ geo: new THREE.CylinderGeometry(0.050, 0.042, 0.036, 10),
+      m: M(s * 0.103, 0.062, -0.012, 0, 0, s * -1.15) });
+    // cheek plate: flat, at the jaw hinge, not across the eyes
+    rivets.push({ geo: roundedBox(0.022, 0.092, 0.056, 0.014, 3),
+      m: M(s * 0.108, -0.026, 0.022, 0.06, s * -0.30, s * 0.10) });
+  }
+  add(head, merge(rivets), mats.ironDark);
+
+  // the horns themselves: out, up and forward, tips curling in over the brow
+  const hornGeo = merge([1, -1].map(s => ({
+    geo: horn([
+      [s * 0.108, 0.062, -0.012],
+      [s * 0.168, 0.098, -0.026],
+      [s * 0.216, 0.170, -0.010],
+      [s * 0.232, 0.252, 0.048],
+      [s * 0.206, 0.312, 0.116],
+    ], 0.046, 0.008, { ridges: 9 }),
+  })));
+  add(head, hornGeo, mats.horn);
+
+  // ---- hair & beard ----------------------------------------------------
+  // Only what escapes the helm: a nape tuft and two side locks. The r13 spike cap is
+  // gone — it lived entirely inside the dome.
+  const hairGeo = [];
+  const tuft = new THREE.ConeGeometry(0.054, 0.16, 7);
+  tuft.translate(0, -0.062, 0);
+  hairGeo.push({ geo: tuft, m: M(0, -0.052, -0.090, 0.55, 0, 0) });
+  for (let i = 0; i < 6; i++) {
+    const s = i < 3 ? 1 : -1;
+    const len = rng.range(0.085, 0.145);
+    const lock = new THREE.ConeGeometry(rng.range(0.020, 0.030), len, 6);
+    lock.translate(0, -len * 0.42, 0);
+    hairGeo.push({ geo: lock,
+      m: M(s * rng.range(0.082, 0.104), -0.028, rng.range(-0.062, 0.010),
+        rng.range(-0.10, 0.22), 0, s * rng.range(0.15, 0.45)) });
+  }
+  add(head, merge(hairGeo), mats.hair);
+
+  // short beard along the jaw — the Nord read is as much the beard as the horns
+  // The first pass built this at r 0.084 around a 0.108 skull, i.e. entirely inside the
+  // head — the dark band under the eyes people would have read as a beard was the cheek
+  // plates' shadow. A beard has to clear the skull it grows on.
+  const beardGeo = merge([
+    { geo: new THREE.SphereGeometry(0.112, 16, 12, 0, Math.PI * 2, Math.PI * 0.50, Math.PI * 0.50),
+      m: M(0, -0.040, 0.004, -0.08, 0, 0, 1.02, 1.32, 1.04) },
+    { geo: roundedBox(0.062, 0.024, 0.030, 0.010, 2), m: M(0, -0.046, 0.094, 0.10, 0, 0) },  // moustache
+  ]);
+  add(head, beardGeo, mats.beard);
 
   // ---- arms ------------------------------------------------------------
   function arm(side) {

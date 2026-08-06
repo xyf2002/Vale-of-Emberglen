@@ -3,6 +3,10 @@
 # they are not ours to redistribute, so they never leave this machine.
 reference/
 captures/
+# Vercel writes a live VERCEL_OIDC_TOKEN into .env.local on `vercel link`.
+# Nothing in the build reads it, so it has no business in the upload.
+.env*
+.vercel/
 progress/
 tools/
 _intdrive.mjs

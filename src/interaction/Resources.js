@@ -105,8 +105,17 @@ function smoothNormals(g) {
   for (let i = 0; i < n; i++) {
     const k = key(i);
     let s = map.get(k);
+    // `s` is the BASE INDEX into acc (stepping 0, 3, 6, ...), NOT an ordinal slot — so it
+    // must never be multiplied by 3 again when it is read back. It was, and every lookup
+    // ran off the end of acc: acc[s] came back `undefined`, arithmetic on it produced NaN,
+    // and TWO THIRDS OF EVERY BUSH'S NORMALS WERE NaN. A NaN normal does not render as an
+    // obvious error, it renders as a surface with no key light — so the bushes came out
+    // blue-black (rgb 31,35,52) and looked exactly like contact shading turned up too far.
+    // Two rounds of palette and contact-shade edits changed the frame by literally zero
+    // bytes before the attribute itself was measured. If shading looks wrong, check the
+    // normals for NaN before touching a colour.
     if (s === undefined) { s = acc.length; map.set(k, s); acc.push(0, 0, 0); }
-    out[i * 3] = s;   // slot index parked in x, rewritten below
+    out[i * 3] = s;   // base index parked in x, rewritten below
   }
   for (let t = 0; t < n; t += 3) {
     const ax = p[t * 3], ay = p[t * 3 + 1], az = p[t * 3 + 2];
@@ -120,12 +129,12 @@ function smoothNormals(g) {
     const fy = e1z * e2x - e1x * e2z;
     const fz = e1x * e2y - e1y * e2x;
     for (let v = 0; v < 3; v++) {
-      const s = out[(t + v) * 3] * 3;
+      const s = out[(t + v) * 3];
       acc[s] += fx; acc[s + 1] += fy; acc[s + 2] += fz;
     }
   }
   for (let i = 0; i < n; i++) {
-    const s = out[i * 3] * 3;
+    const s = out[i * 3];
     let x = acc[s], y = acc[s + 1], z = acc[s + 2];
     const L = Math.hypot(x, y, z) || 1;
     out[i * 3] = x / L; out[i * 3 + 1] = y / L; out[i * 3 + 2] = z / L;
@@ -148,7 +157,13 @@ function bushGeometry(noise, seed) {
   ];
   const top = new THREE.Color(0x6d8c3e);
   const mid = new THREE.Color(0x476026);
-  const bot = new THREE.Color(0x27351a);
+  // `bot` IS NOT FREE TO BE AS DARK AS IT LOOKS ON PAPER. It is multiplied a second time
+  // by the contact-shade band, which covers the lower ~36% of the visible bush — exactly
+  // where `bot` is applied. Authored at 0x27351a the two stack to a near-zero albedo and
+  // the sky ambient takes over, so the base of every bush rendered BLUE-BLACK (measured
+  // rgb 31,35,52 in r14 interaction_feed, against 78,102,56 in r13). Vertex-colour AO and
+  // shader AO must be budgeted together; either alone is fine.
+  const bot = new THREE.Color(0x3c5223);
   const c = new THREE.Color();
   const parts = [];
 
@@ -275,7 +290,9 @@ export function createResources(ctx, world, fx) {
   // Object-side contact occlusion. Bushes are composed at `terrainY - 0.05*s` below, so
   // the ground plane sits at +0.05*s above the instance origin -> sinkRel = +0.05. The
   // band covers roughly the bottom third of the ~0.95*s of shrub that is above ground.
-  applyContactShade(bushMat, { rangeAbs: 0.06, rangeRel: 0.26, dark: 0.46, sinkRel: 0.05 });
+  // dark 0.46 -> 0.66: the bush already carries a vertical vertex-colour ramp down to
+  // `bot`, so this band is the SECOND darkening on the same pixels. See the note by `bot`.
+  applyContactShade(bushMat, { rangeAbs: 0.06, rangeRel: 0.26, dark: 0.66, sinkRel: 0.05 });
   const berryMat = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: false, roughness: 0.42, metalness: 0 });
   const rockMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, flatShading: true });
   // ...and rocks are composed at `terrainY + 0.16*s`, i.e. the ground is BELOW the

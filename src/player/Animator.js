@@ -24,6 +24,29 @@ const POLE = new THREE.Vector3(0, 0, -1);   // knees bend toward the character's
 const _tmpTarget = [new THREE.Vector3(), new THREE.Vector3()];
 const _hip = [new THREE.Vector3(), new THREE.Vector3()];
 
+// arm IK scratch — holdWeapon() runs every frame and may not allocate
+const _sh = new THREE.Vector3();
+const _d = new THREE.Vector3();
+const _f = new THREE.Vector3();
+const _pole = new THREE.Vector3();
+const _axis = new THREE.Vector3();
+const _upper = new THREE.Vector3();
+const _elbowP = new THREE.Vector3();
+const _fore = new THREE.Vector3();
+const _ex = new THREE.Vector3();
+const _ey = new THREE.Vector3();
+const _ez = new THREE.Vector3();
+const _bas = new THREE.Matrix4();
+const _inv = new THREE.Matrix4();
+const _qa = new THREE.Quaternion();
+const _qb = new THREE.Quaternion();
+const _gripL = new THREE.Vector3();
+const _foreL = new THREE.Vector3();
+const _boreL = new THREE.Vector3();
+const _handL = new THREE.Vector3();
+
+const ARM_REACH = (RIG.upperArm + RIG.foreArm);
+
 const damp = (a, b, l, dt) => a + (b - a) * (1 - Math.exp(-l * dt));
 const smooth = (t) => t * t * (3 - 2 * t);
 const clamp = THREE.MathUtils.clamp;
