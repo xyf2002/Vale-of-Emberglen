@@ -25,6 +25,116 @@ const KINDS = {
 };
 
 /**
+ * GROUNDING A PROP FROM OUTSIDE src/world — WHY THIS IS A LOCAL COPY.
+ *
+ * `applyContactShade` lives in src/world/vegetation.js and src/world/props.js imports it.
+ * We cannot: systems never import each other (see CLAUDE.md), and the world's public
+ * surface deliberately exposes the GROUND-side half (`world.setContactPatches`) and not
+ * this one, because this half is a shader patch on a material the world never sees.
+ * Twenty lines duplicated is the price of the directory boundary; the two copies are
+ * independent by design, so do not "unify" them.
+ *
+ * `sink` is where the GROUND PLANE sits relative to the INSTANCE ORIGIN, in units of
+ * instance scale — not where the object sits relative to the ground. The sign trips
+ * everyone: this file's bushes are composed at `terrainY - 0.05*s`, so the ground is at
+ * +0.05*s in the varying's frame (sinkRel = +0.05), while its rocks are composed at
+ * `terrainY + 0.16*s`, so the ground is at −0.16*s (sinkRel = NEGATIVE). Getting it
+ * backwards anchors the band underground and the visible part runs at half strength —
+ * MEASURED here, not read: see tools/_bushshade.mjs, which samples the bush's own pixels
+ * at the base and at mid-height and reports the ratio.
+ */
+function applyContactShade(mat, opts = {}) {
+  const { rangeAbs = 0.10, rangeRel = 0.25, dark = 0.46, sinkAbs = 0, sinkRel = 0 } = opts;
+  const prev = mat.onBeforeCompile;
+  const prevKey = mat.customProgramCacheKey;
+  const f = (v) => v.toFixed(4);
+  mat.onBeforeCompile = function (sh, renderer) {
+    if (prev) prev.call(this, sh, renderer);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying float vCH; varying float vCS;')
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        {
+          vec4 cwp_ = vec4(transformed, 1.0);
+          float cbase_ = 0.0;
+          vCS = 1.0;
+          #ifdef USE_INSTANCING
+            cwp_ = instanceMatrix * cwp_;
+            cbase_ = instanceMatrix[3].y;
+            vCS = length(instanceMatrix[0].xyz);
+          #endif
+          vCH = cwp_.y - cbase_;
+        }`);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vCH; varying float vCS;')
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        {
+          float gy_ = ${f(sinkAbs)} + ${f(sinkRel)} * vCS;
+          float rg_ = ${f(rangeAbs)} + ${f(rangeRel)} * vCS;
+          diffuseColor.rgb *= mix(${f(dark)}, 1.0, smoothstep(0.0, max(rg_, 1e-3), vCH - gy_));
+        }`);
+  };
+  const tag = `ict${rangeAbs}_${rangeRel}_${dark}_${sinkAbs}_${sinkRel}`;
+  mat.customProgramCacheKey = prevKey ? () => prevKey.call(mat) + tag : () => tag;
+  return mat;
+}
+
+/**
+ * Average face normals across coincident vertices.
+ *
+ * WHY THIS EXISTS — it is the whole of r12's "A's bushes are visibly flat-shaded
+ * icosahedra, you can count the triangles, the facet edges are hard". The material has
+ * `flatShading: false` and always did, which is why nobody looked here: the FLATNESS IS
+ * IN THE GEOMETRY. `THREE.IcosahedronGeometry` is non-indexed, and
+ * `computeVertexNormals()` on a non-indexed geometry writes the face normal to all three
+ * of a triangle's vertices — i.e. it produces flat shading no matter what the material
+ * says. Every lobe went through that twice (once per lobe, once on the merge).
+ *
+ * Welding by position instead costs nothing at runtime and no triangles, and it removes
+ * the hard facet edges while keeping the lumpy silhouette the displacement gives. Note
+ * the weld is PER LOBE, deliberately: welding across the merged clump would average
+ * normals across the seams where two lobes interpenetrate and smear the clump back into
+ * one egg, which is the shape this geometry exists to avoid.
+ */
+function smoothNormals(g) {
+  const p = g.attributes.position.array;
+  const n = g.attributes.position.count;
+  const out = new Float32Array(n * 3);
+  const map = new Map();
+  const key = (i) => `${Math.round(p[i * 3] * 8192)},${Math.round(p[i * 3 + 1] * 8192)},${Math.round(p[i * 3 + 2] * 8192)}`;
+  const acc = [];
+  for (let i = 0; i < n; i++) {
+    const k = key(i);
+    let s = map.get(k);
+    if (s === undefined) { s = acc.length; map.set(k, s); acc.push(0, 0, 0); }
+    out[i * 3] = s;   // slot index parked in x, rewritten below
+  }
+  for (let t = 0; t < n; t += 3) {
+    const ax = p[t * 3], ay = p[t * 3 + 1], az = p[t * 3 + 2];
+    const bx = p[t * 3 + 3], by = p[t * 3 + 4], bz = p[t * 3 + 5];
+    const cx = p[t * 3 + 6], cy = p[t * 3 + 7], cz = p[t * 3 + 8];
+    const e1x = bx - ax, e1y = by - ay, e1z = bz - az;
+    const e2x = cx - ax, e2y = cy - ay, e2z = cz - az;
+    // unnormalised cross product, so bigger triangles weigh more — which is what keeps
+    // a sliver at the pole from dominating the average
+    const fx = e1y * e2z - e1z * e2y;
+    const fy = e1z * e2x - e1x * e2z;
+    const fz = e1x * e2y - e1y * e2x;
+    for (let v = 0; v < 3; v++) {
+      const s = out[(t + v) * 3] * 3;
+      acc[s] += fx; acc[s + 1] += fy; acc[s + 2] += fz;
+    }
+  }
+  for (let i = 0; i < n; i++) {
+    const s = out[i * 3] * 3;
+    let x = acc[s], y = acc[s + 1], z = acc[s + 2];
+    const L = Math.hypot(x, y, z) || 1;
+    out[i * 3] = x / L; out[i * 3 + 1] = y / L; out[i * 3 + 2] = z / L;
+  }
+  g.setAttribute('normal', new THREE.BufferAttribute(out, 3));
+  return g;
+}
+
+/**
  * Foliage: four overlapping displaced lobes merged into one geometry, so the silhouette
  * is a clump of rounded masses rather than one smooth egg — the same "convex body,
  * detail only in the appendages" logic the creatures use, applied to a shrub.
@@ -63,12 +173,15 @@ function bushGeometry(noise, seed) {
     g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     g.deleteAttribute('uv');
     g.deleteAttribute('normal');
-    g.computeVertexNormals();
+    // NOT computeVertexNormals() — see smoothNormals(). This geometry is non-indexed, so
+    // the built-in writes a face normal to every vertex and the shrub renders flat-shaded
+    // with countable facets however the material is configured.
+    smoothNormals(g);
     parts.push(g);
   }
 
   const merged = mergeGeometries(parts, false) ?? parts[0];
-  merged.computeVertexNormals();
+  // and NOT here either: the merge only copies the normals the lobes already carry.
   merged.computeBoundingSphere();
   return merged;
 }
@@ -159,16 +272,39 @@ export function createResources(ctx, world, fx) {
   const MAX_BUSH = 180, MAX_BERRY = 1250, MAX_ROCK = 90, MAX_BRANCH = 120;
 
   const bushMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.94, metalness: 0, flatShading: false });
+  // Object-side contact occlusion. Bushes are composed at `terrainY - 0.05*s` below, so
+  // the ground plane sits at +0.05*s above the instance origin -> sinkRel = +0.05. The
+  // band covers roughly the bottom third of the ~0.95*s of shrub that is above ground.
+  applyContactShade(bushMat, { rangeAbs: 0.06, rangeRel: 0.26, dark: 0.46, sinkRel: 0.05 });
   const berryMat = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: false, roughness: 0.42, metalness: 0 });
   const rockMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, flatShading: true });
+  // ...and rocks are composed at `terrainY + 0.16*s`, i.e. the ground is BELOW the
+  // instance origin: sinkRel is negative here and positive above. Same file, same
+  // mechanism, opposite sign — this is the trap the header note is about.
+  applyContactShade(rockMat, { rangeAbs: 0.05, rangeRel: 0.30, dark: 0.46, sinkRel: -0.16 });
   const branchMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0 });
+  // NO object-side band on the branches — measured negative result. A stick is a 9 cm
+  // cylinder lying on the ground, so ANY band deep enough to be visible swallows the
+  // whole prop and just renders it uniformly darker; there is no "lower surface" to
+  // occlude. Their grounding is entirely the ground-side patch.
 
   const bushes = new THREE.InstancedMesh(bushGeometry(noise, 3.7), bushMat, MAX_BUSH);
-  // there are twice as many berries in the vale as there used to be, so each one is
-  // cheaper: at 8cm across nobody has ever counted the segments on one
-  const berries = new THREE.InstancedMesh(new THREE.SphereGeometry(0.08, 6, 4), berryMat, MAX_BERRY);
+  // 6x4 was chosen when berries were tiny background dressing; r12's blind critic named
+  // them specifically — "the berries are literal faceted polyhedra rather than spheres" —
+  // and in creature_group the near thicket's berries are 30-40 px across, which is plenty
+  // to count six meridians on. 10x7 triples the triangles of a part that is 36 tris to
+  // begin with; the whole layer is still one instanced draw.
+  const berries = new THREE.InstancedMesh(new THREE.SphereGeometry(0.08, 10, 7), berryMat, MAX_BERRY);
   const rocks = new THREE.InstancedMesh(rockGeometry(noise, 11.3), rockMat, MAX_ROCK);
   const branches = new THREE.InstancedMesh(branchGeometry(), branchMat, MAX_BRANCH);
+
+  // named so a probe can find them without guessing at vertex counts — see
+  // tools/_bushshade.mjs, which swaps the bush material for an unshaded clone to
+  // measure the object-side contact band as an exact A/B
+  bushes.name = 'gatherBush';
+  berries.name = 'gatherBerry';
+  rocks.name = 'gatherRock';
+  branches.name = 'gatherBranch';
 
   for (const m of [bushes, berries, rocks, branches]) {
     m.castShadow = true;
@@ -213,7 +349,7 @@ export function createResources(ctx, world, fx) {
       def: KINDS[kind],
       label: KINDS[kind].label,
       ready: true, channel: 0, cool: 0, shake: 0, shakeSeed: rng.next() * 10,
-      parts: [], berryIdx: [],
+      parts: [], berryIdx: [], patches: [],
     };
 
     if (kind === 'berry') {
@@ -228,6 +364,10 @@ export function createResources(ctx, world, fx) {
         const by0 = gy - s * 0.05;
         node.parts.push({ mesh: bushes, i: idx, x, y: by0, z, ry, s });
         setInst(bushes, idx, x, by0, z, 0, ry, 0, s, s * 0.96, s);
+        // Ground-side patch, PER BUSH not per cluster. The widest lobe reaches 0.79 in
+        // local units, so anything at or under s*0.79 is entirely roofed by the shrub and
+        // moves no pixels at all; +0.30 m of skirt is the part a camera can actually see.
+        node.patches.push({ x, z, r: s * 0.85 + 0.30, dark: 0.62 });
         // berries hung on the outside of the upper lobes, 6-10 per bush
         const nb = rng.int(6, 10);
         for (let b = 0; b < nb && berryN < MAX_BERRY; b++) {
@@ -257,6 +397,11 @@ export function createResources(ctx, world, fx) {
         const rz = rng.range(-0.16, 0.16);
         setInst(branches, idx, x, gy + 0.05 * s, z, rng.range(-0.1, 0.1), ry, rz, s, s, s);
         node.parts.push({ mesh: branches, i: idx, x, y: gy + 0.05 * s, z, ry, rz, s });
+        // A stick is 0.95 m long and 9 cm thick, and the patch is a disc — so it is the
+        // one family here where the patch is deliberately NARROWER than the prop's long
+        // axis. A disc sized to the half-length would darken a 0.7 m circle of open grass
+        // either side of a 9 cm twig, and 3-5 of them per cluster stack.
+        node.patches.push({ x, z, r: s * 0.34 + 0.20, dark: 0.74 });
       }
     } else {
       const n = rng.int(2, 4);
@@ -269,12 +414,40 @@ export function createResources(ctx, world, fx) {
         const idx = rockN++;
         setInst(rocks, idx, x, gy + s * 0.16, z, rng.range(-0.12, 0.12), ry, rng.range(-0.12, 0.12), s, s, s);
         node.parts.push({ mesh: rocks, i: idx, x, y: gy + s * 0.16, z, ry, s });
+        // stone reaches 0.5*1.25*1.42 = 0.89 local at its widest, and it is the one prop
+        // here with a hard edge against the ground, so the patch is tight and strong
+        node.patches.push({ x, z, r: s * 0.80 + 0.26, dark: 0.58 });
       }
     }
 
     if (!node.parts.length) return null;
     nodes.push(node);
     return node;
+  }
+
+  // ---- ground-side contact occlusion ---------------------------------------
+  //
+  // The world owns the ground, so the world draws the patch; this system owns the props,
+  // so it says where. `world.setContactPatches(tag, patches)` replaces the whole tagged
+  // set, which is why this rebuilds the list wholesale rather than tracking deltas — it
+  // runs once at populate and once per harvest, i.e. a few dozen times a session.
+  //
+  // Harvested wood and stone sink out of sight (see harvest()), so their patches have to
+  // go with them or the vale is left with unexplained dark discs. Berry bushes stay put
+  // when stripped — only the fruit leaves — so theirs never move.
+  let contactDirty = false;
+  let contactCount = 0;
+
+  function syncContact() {
+    contactDirty = false;
+    if (!world?.setContactPatches) return 0;
+    const list = [];
+    for (const n of nodes) {
+      if (!n.ready && n.kind !== 'berry') continue;
+      for (const p of n.patches) list.push(p);
+    }
+    contactCount = world.setContactPatches('gatherables', list) ?? 0;
+    return list.length;
   }
 
   function scatter(kind, count, near, radius) {
@@ -323,6 +496,7 @@ export function createResources(ctx, world, fx) {
       bushes.count = bushN; berries.count = berryN; rocks.count = rockN; branches.count = branchN;
       for (const m of [bushes, berries, rocks, branches]) m.instanceMatrix.needsUpdate = true;
       if (berries.instanceColor) berries.instanceColor.needsUpdate = true;
+      syncContact();
       return nodes.length;
     },
 
@@ -385,6 +559,7 @@ export function createResources(ctx, world, fx) {
           if (n.cool <= 0) regrow(n);
         }
       }
+      if (contactDirty) syncContact();
       return done;
     },
 
@@ -395,6 +570,10 @@ export function createResources(ctx, world, fx) {
         byKind: nodes.reduce((a, n) => (a[n.kind] = (a[n.kind] || 0) + 1, a), {}),
         readyBerry: nodes.filter((n) => n.kind === 'berry' && n.ready).length,
         harvested,
+        // instrument: how many patches the world's contact field is carrying in total
+        // once ours are folded in, so a probe can prove they registered
+        contactPatches: contactCount,
+        ownPatches: nodes.reduce((a, n) => a + ((n.ready || n.kind === 'berry') ? n.patches.length : 0), 0),
       };
     },
   };
@@ -418,6 +597,8 @@ export function createResources(ctx, world, fx) {
     n.ready = false;
     n.cool = n.def.regrow;
     n.shake = 1;
+    // wood and stone sink out of the world when taken; their ground patches go too
+    if (n.kind !== 'berry') contactDirty = true;
 
     const centre = n.position;
     if (n.kind === 'berry') {
@@ -453,6 +634,7 @@ export function createResources(ctx, world, fx) {
   function regrow(n) {
     n.ready = true;
     n.shake = 0.5;
+    if (n.kind !== 'berry') contactDirty = true;
     if (n.kind === 'berry') {
       for (const b of n.berryIdx) { b.on = true; setInst(berries, b.i, b.x, b.y, b.z, 0, 0, 0, b.s, b.s, b.s); }
       berries.instanceMatrix.needsUpdate = true;

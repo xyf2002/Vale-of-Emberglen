@@ -1,0 +1,9 @@
+# Nothing outside src/ + index.html + vite.config.js is needed to build the site.
+# reference/ in particular holds real Palworld plates used as a measuring stick —
+# they are not ours to redistribute, so they never leave this machine.
+reference/
+captures/
+progress/
+tools/
+_intdrive.mjs
+_warm.mjs

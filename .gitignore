@@ -3,3 +3,6 @@ dist/
 captures/
 .vite/
 __pycache__/
+.vercel
+.env*
+reference/palworld/
