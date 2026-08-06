@@ -512,6 +512,265 @@ function bond(ac, out, p) {
 }
 
 // ---------------------------------------------------------------------------
+// BOND SPHERES
+//
+// The sphere is a hollow shell with something alive inside it, and every cue here is
+// built out of that one idea: a metal body with a ring, a soft interior, and — through
+// the wobble — a rising argument between the two. The five beats in spheres/index.js get
+// five cues and they are deliberately a family: the same 620 Hz shell partial and the
+// same 3.9 kHz hinge tick run through all of them, so a player hears one object.
+// ---------------------------------------------------------------------------
+
+/** the shell's own voice: a small inharmonic bell, reused by every sphere cue */
+const SHELL = 620;
+
+/** wind-up, release, and the whistle of a thrown thing */
+function sphereThrow(ac, out, p, rng) {
+  const t = out.t, g = p.gain ?? 1;
+  // the arm: a short low swish that sweeps up as it accelerates
+  burst(ac, out, {
+    t, dur: 0.16, type: 'bandpass', freq: 700, Q: 0.8, peak: 0.20 * g,
+    sweepTo: 2400, attack: 0.05, pan: (p.pan ?? 0) * 0.6, wet: 0.15,
+  });
+  // the release: metal leaving the hand
+  partial(ac, out, { t: t + 0.02, type: 'triangle', freq: SHELL * 1.6, to: SHELL, glide: 0.05, peak: 0.10 * g, decay: 0.08, pan: p.pan ?? 0 });
+  burst(ac, out, { t: t + 0.02, dur: 0.035, type: 'highpass', freq: 3900, peak: 0.09 * g, attack: 0.001 });
+  // ...and the doppler of it going away, which is what tells you it is in the air
+  const o = osc(ac, 'sine', 1500);
+  o.frequency.setValueAtTime(1500, t + 0.04);
+  o.frequency.exponentialRampToValueAtTime(760, t + 0.34);
+  const env = perc(ac, t + 0.04, { peak: 0.045 * g, attack: 0.03, decay: 0.28 });
+  o.connect(env); env.connect(out.dry);
+  const w = gain(ac, 0.45); env.connect(w); w.connect(out.wet);
+  fire([o], env, t + 0.04, t + 0.7);
+}
+
+/** contact: the hinge opens, a beam takes hold, and the shell slams */
+function sphereHit(ac, out, p, rng) {
+  const t = out.t, g = p.gain ?? 1;
+  // 1. hinge — two bright ticks as the halves part
+  burst(ac, out, { t, dur: 0.03, type: 'highpass', freq: 3900, peak: 0.16 * g, attack: 0.001, pan: p.pan ?? 0 });
+  fmBell(ac, out, { t, freq: SHELL * 2, peak: 0.09 * g, decay: 0.35, index: 6.5, ratio: 4.1, wet: 0.45 });
+  // 2. the beam: a rising filtered swell — the only sustained thing in the whole family
+  const a = assets(ac);
+  const src = loopSource(ac, a.white, 1);
+  const bp = filter(ac, 'bandpass', 700, 3.2);
+  bp.frequency.setValueAtTime(620, t + 0.04);
+  bp.frequency.exponentialRampToValueAtTime(3200, t + 0.44);
+  const env = swell(ac, t + 0.04, { peak: 0.10 * g, attack: 0.16, hold: 0.14, release: 0.14 });
+  const pn = panner(ac, p.pan ?? 0);
+  src.connect(bp); bp.connect(env);
+  if (pn) { env.connect(pn); pn.connect(out.dry); } else env.connect(out.dry);
+  const w = gain(ac, 0.5); env.connect(w); w.connect(out.wet);
+  fire([src], env, t + 0.04, t + 0.9);
+  // a tone rising with it, so the pull-in has a pitch and not just a hiss
+  partial(ac, out, { t: t + 0.06, type: 'sine', freq: 240, to: 900, glide: 0.36, peak: 0.07 * g, attack: 0.08, decay: 0.32, wet: 0.4 });
+  // 3. the slam — the loudest single moment in the sphere family
+  partial(ac, out, { t: t + 0.50, type: 'sine', freq: 150, to: 78, glide: 0.05, peak: 0.34 * g, decay: 0.14 });
+  burst(ac, out, { t: t + 0.50, dur: 0.05, type: 'bandpass', freq: 2600, Q: 1.6, peak: 0.24 * g, attack: 0.001, pan: p.pan ?? 0 });
+  fmBell(ac, out, { t: t + 0.505, freq: SHELL, peak: 0.13 * g, decay: 0.55, index: 5.6, ratio: 3.4, wet: 0.55 });
+}
+
+/**
+ * One wobble. `p.shake` is 0-based and `p.of` is how many there could be, and the whole
+ * point of this cue is that it is NOT the same sound three times: each rock is faster,
+ * higher, harder, and carries one more beat of a tension tone that is only resolved by
+ * the click or the burst. Three identical ticks would make the wobble a progress bar.
+ */
+function sphereShake(ac, out, p, rng) {
+  const t = out.t, g = p.gain ?? 1;
+  const i = Math.min(2, Math.max(0, (p.shake ?? 1) - 1));   // 0,1,2
+  const tension = i / 2;                                     // 0 .. 1
+  const rate = 1 + tension * 0.45;
+  const pitch = 1 + tension * 0.30;
+
+  // the body rocking on the grass: a low scrape that leans one way then knocks back
+  burst(ac, out, {
+    t, dur: 0.13 / rate, type: 'bandpass', freq: 420 * pitch, Q: 1.1,
+    peak: (0.13 + tension * 0.10) * g, attack: 0.02, sweepTo: 900 * pitch, pan: p.pan ?? 0,
+  });
+  partial(ac, out, { t, type: 'sine', freq: 110 * pitch, to: 78, glide: 0.07, peak: (0.14 + tension * 0.12) * g, decay: 0.10 });
+  // the shell answering — brighter and shorter each time
+  fmBell(ac, out, {
+    t: t + 0.02, freq: SHELL * pitch, peak: (0.07 + tension * 0.07) * g,
+    decay: 0.42 - tension * 0.14, index: 4.5 + tension * 2.5, ratio: 3.51,
+    pan: (p.pan ?? 0) * 0.7, wet: 0.5,
+  });
+  // and the thing inside pushing back: a rising held tone that only the resolve releases
+  partial(ac, out, {
+    t: t + 0.03, type: 'triangle', freq: mtof(64 + i * 3), to: mtof(65 + i * 3),
+    glide: 0.3, peak: (0.035 + tension * 0.05) * g, attack: 0.06, decay: 0.34 + tension * 0.2, wet: 0.5,
+  });
+  // the last wobble gets an extra knock a beat later — the near-miss you can hear
+  if (i >= 2) {
+    burst(ac, out, { t: t + 0.19, dur: 0.05, type: 'bandpass', freq: 1500, Q: 2.2, peak: 0.11 * g, attack: 0.002 });
+  }
+}
+
+/**
+ * The click. Deliberately SMALL — `creature:tamed` fires immediately behind it and the
+ * bond chord is the emotional payload. This is the mechanical fact of the catch: a latch
+ * dropping, then a steady glow settling in under it.
+ */
+function sphereCaught(ac, out, p) {
+  const t = out.t, g = p.gain ?? 1;
+  burst(ac, out, { t, dur: 0.02, type: 'highpass', freq: 4600, peak: 0.20 * g, attack: 0.0008 });
+  partial(ac, out, { t, type: 'sine', freq: 1900, peak: 0.10 * g, decay: 0.035 });
+  partial(ac, out, { t: t + 0.05, type: 'sine', freq: 160, to: 120, glide: 0.05, peak: 0.16 * g, decay: 0.12 });
+  // the steady glow: a fifth settling in, quiet, under whatever comes next
+  fmBell(ac, out, { t: t + 0.07, freq: mtof(69), peak: 0.09 * g, decay: 1.5, index: 3.2, wet: 0.6 });
+  fmBell(ac, out, { t: t + 0.16, freq: mtof(76), peak: 0.06 * g, decay: 1.7, index: 3.0, wet: 0.65 });
+}
+
+/** it bursts open: the tension tone is released downward, which is the whole point */
+function sphereEscaped(ac, out, p, rng) {
+  const t = out.t, g = p.gain ?? 1;
+  burst(ac, out, { t, dur: 0.045, type: 'highpass', freq: 2600, peak: 0.30 * g, attack: 0.0008, pan: p.pan ?? 0 });
+  partial(ac, out, { t, type: 'sine', freq: 220, to: 90, glide: 0.09, peak: 0.24 * g, decay: 0.16 });
+  // the halves flying apart, ringing off-key
+  fmBell(ac, out, { t: t + 0.01, freq: SHELL * 1.19, peak: 0.12 * g, decay: 0.7, index: 7.5, ratio: 2.72, pan: -0.2, wet: 0.55 });
+  fmBell(ac, out, { t: t + 0.04, freq: SHELL * 0.84, peak: 0.09 * g, decay: 0.6, index: 7.0, ratio: 2.72, pan: 0.24, wet: 0.55 });
+  // the held tension falling away
+  partial(ac, out, { t: t + 0.02, type: 'triangle', freq: mtof(70), to: mtof(58), glide: 0.4, peak: 0.07 * g, attack: 0.01, decay: 0.42, wet: 0.5 });
+  burst(ac, out, { t: t + 0.06, dur: 0.3, type: 'bandpass', freq: 3200, Q: 0.5, peak: 0.07 * g, attack: 0.03, wet: 0.3 });
+}
+
+// ---------------------------------------------------------------------------
+// WEAPONS
+//
+// A gunshot outdoors is three things and every one of them has to be there or it reads
+// as a UI blip: a 4 ms CRACK with no pitch at all, a BODY with a downward pitch glide
+// that carries the calibre, and a TAIL that is mostly reverb and tells you how open the
+// ground is. Everything below is that shape, scaled by weapon.
+// ---------------------------------------------------------------------------
+
+const GUN = {
+  pistol: { body: 168, crack: 0.30, bodyG: 0.46, tail: 0.34, tailF: 900, bright: 5200 },
+  rifle: { body: 122, crack: 0.38, bodyG: 0.56, tail: 0.52, tailF: 700, bright: 6200 },
+};
+
+function weaponFire(ac, out, p, rng) {
+  const t = out.t, g = p.gain ?? 1;
+  const d = GUN[p.id] ?? GUN.pistol;
+  const v = 0.94 + rng.next() * 0.12;
+
+  // 1. crack — no tone, all edge. This is the part the ear locates.
+  burst(ac, out, { t, dur: 0.006, type: 'highpass', freq: d.bright, peak: d.crack * g, attack: 0.0004, pan: p.pan ?? 0 });
+  burst(ac, out, { t, dur: 0.028, type: 'bandpass', freq: 2400 * v, Q: 0.6, peak: d.crack * 0.75 * g, attack: 0.0006, pan: p.pan ?? 0, wet: 0.28 });
+  // 2. body — the pitch glide is the calibre
+  partial(ac, out, { t, type: 'sine', freq: d.body * v, to: d.body * 0.42, glide: 0.055, peak: d.bodyG * g, attack: 0.0008, decay: 0.10 });
+  burst(ac, out, { t: t + 0.002, dur: 0.085, type: 'bandpass', freq: 620 * v, Q: 0.75, peak: 0.26 * g, attack: 0.001, sweepTo: 230, wet: 0.3 });
+  // 3. tail — mostly reverb; this is the meadow answering
+  burst(ac, out, { t: t + 0.012, dur: d.tail, type: 'bandpass', freq: d.tailF, Q: 0.45, peak: 0.11 * g, attack: 0.02, wet: 0.85, buffer: 'pink' });
+  // the action cycling, a beat behind the shot
+  burst(ac, out, { t: t + 0.045, dur: 0.05, type: 'bandpass', freq: 3400, Q: 2.4, peak: 0.055 * g, attack: 0.002, pan: (p.pan ?? 0) * 0.5 });
+}
+
+/**
+ * Where the round lands. Surface-aware, off the same SURFACE table the footsteps use, so
+ * a bullet into grass and a boot into grass are demonstrably the same ground.
+ */
+function weaponImpact(ac, out, p, rng) {
+  const t = out.t, g = (p.gain ?? 1);
+  const surf = p.surface ?? 'grass';
+  const s = SURFACE[surf] ?? SURFACE.dirt;
+  const pan = p.pan ?? 0;
+
+  if (surf === 'rock' || surf === 'stone') {
+    // chips: a hard tick, a ricochet whine, and two fragments landing
+    burst(ac, out, { t, dur: 0.018, type: 'highpass', freq: 5200, peak: 0.26 * g, attack: 0.0005, pan });
+    fmBell(ac, out, { t, freq: 2600 + rng.next() * 900, peak: 0.11 * g, decay: 0.28, index: 8, ratio: 4.7, pan, wet: 0.6 });
+    for (let i = 0; i < 2; i++) {
+      burst(ac, out, { t: t + 0.06 + i * (0.05 + rng.next() * 0.05), dur: 0.02, type: 'bandpass', freq: 3000 + rng.next() * 1500, Q: 3, peak: 0.05 * g, attack: 0.001, pan: pan + (rng.next() - 0.5) * 0.4 });
+    }
+    return;
+  }
+  if (surf === 'water') {
+    burst(ac, out, { t, dur: 0.06, type: 'bandpass', freq: 1800, Q: 0.9, peak: 0.22 * g, attack: 0.001, sweepTo: 600, pan });
+    burst(ac, out, { t: t + 0.02, dur: 0.34, type: 'highpass', freq: 1400, peak: 0.13 * g, attack: 0.015, wet: 0.4, pan });
+    partial(ac, out, { t: t + 0.01, type: 'sine', freq: 380, to: 900, glide: 0.09, peak: 0.08 * g, decay: 0.1 });
+    return;
+  }
+  if (surf === 'wood') {
+    partial(ac, out, { t, type: 'sine', freq: 260, to: 170, glide: 0.03, peak: 0.24 * g, decay: 0.09, pan });
+    burst(ac, out, { t, dur: 0.035, type: 'bandpass', freq: 2200, Q: 2.2, peak: 0.17 * g, attack: 0.0008, pan });
+    partial(ac, out, { t: t + 0.01, type: 'triangle', freq: 420, peak: 0.06 * g, decay: 0.11, wet: 0.3 });
+    return;
+  }
+  // grass / dirt / sand: a dull slap and a spray of loose material
+  partial(ac, out, { t, type: 'sine', freq: s.thump * 1.15, to: s.thump * 0.5, glide: 0.035, peak: 0.20 * g, decay: 0.075, pan });
+  burst(ac, out, { t, dur: 0.045, type: 'bandpass', freq: s.scuffF * 1.3, Q: 0.7, peak: 0.17 * g, attack: 0.0008, pan, wet: 0.18 });
+  burst(ac, out, { t: t + 0.02, dur: 0.17, type: 'bandpass', freq: s.scuffF * 2.2, Q: 0.5, peak: 0.07 * g, attack: 0.02, pan: pan * 0.7 });
+}
+
+/**
+ * A round into something alive. Soft, low and short — no crunch, no wet gore. It has to
+ * read as "that hurt and it is winded", never as damage, because nothing in this game
+ * dies and the sound is half of what tells the player so. The creature's own yelp is
+ * fired separately by the director, in its own species timbre.
+ */
+function weaponFlesh(ac, out, p, rng) {
+  const t = out.t, g = p.gain ?? 1;
+  const pan = p.pan ?? 0;
+  partial(ac, out, { t, type: 'sine', freq: 96, to: 62, glide: 0.06, peak: 0.26 * g, decay: 0.13, pan });
+  burst(ac, out, { t, dur: 0.05, type: 'lowpass', freq: 900, Q: 0.6, peak: 0.20 * g, attack: 0.001, buffer: 'brown', pan });
+  // the breath knocked out of it
+  burst(ac, out, { t: t + 0.03, dur: 0.16, type: 'bandpass', freq: 700 + rng.next() * 200, Q: 1.5, peak: 0.09 * g, attack: 0.02, pan, wet: 0.2 });
+}
+
+/** the trigger on an empty magazine: one dry mechanical click and nothing else */
+function weaponDry(ac, out, p) {
+  const t = out.t, g = p.gain ?? 1;
+  burst(ac, out, { t, dur: 0.014, type: 'highpass', freq: 3600, peak: 0.14 * g, attack: 0.0006 });
+  partial(ac, out, { t, type: 'sine', freq: 1250, peak: 0.05 * g, decay: 0.02 });
+  burst(ac, out, { t: t + 0.03, dur: 0.02, type: 'bandpass', freq: 1800, Q: 3.4, peak: 0.06 * g, attack: 0.001 });
+}
+
+/**
+ * The reload, one cue per phase, because the phases are the point: a player who can hear
+ * "magazine out / fresh magazine / charging" can learn where the cancel window is.
+ */
+function weaponReload(ac, out, p, rng) {
+  const t = out.t, g = p.gain ?? 1;
+  const pan = (p.pan ?? 0) * 0.4;
+  switch (p.phase) {
+    case 'magout':
+      // catch released, then the magazine sliding free
+      burst(ac, out, { t, dur: 0.016, type: 'highpass', freq: 3200, peak: 0.13 * g, attack: 0.0006, pan });
+      burst(ac, out, { t: t + 0.05, dur: 0.14, type: 'bandpass', freq: 1500, Q: 1.2, peak: 0.09 * g, attack: 0.02, sweepTo: 800, pan });
+      partial(ac, out, { t: t + 0.20, type: 'sine', freq: 190, to: 140, glide: 0.03, peak: 0.08 * g, decay: 0.07, pan });
+      break;
+    case 'magin':
+      // a fresh magazine seated: one firm thunk with a spring ring on top
+      partial(ac, out, { t: t + 0.20, type: 'sine', freq: 150, to: 105, glide: 0.04, peak: 0.20 * g, decay: 0.10, pan });
+      burst(ac, out, { t: t + 0.20, dur: 0.03, type: 'bandpass', freq: 2400, Q: 2.0, peak: 0.14 * g, attack: 0.0008, pan });
+      fmBell(ac, out, { t: t + 0.21, freq: 1750, peak: 0.045 * g, decay: 0.22, index: 6, ratio: 4.3, pan, wet: 0.35 });
+      break;
+    case 'charge':
+      // the slide/bolt: pulled back, then let go
+      burst(ac, out, { t, dur: 0.07, type: 'bandpass', freq: 2000, Q: 1.4, peak: 0.11 * g, attack: 0.006, sweepTo: 3200, pan });
+      burst(ac, out, { t: t + 0.12, dur: 0.028, type: 'bandpass', freq: 3000, Q: 1.8, peak: 0.18 * g, attack: 0.0006, pan });
+      partial(ac, out, { t: t + 0.12, type: 'sine', freq: 210, to: 150, glide: 0.03, peak: 0.11 * g, decay: 0.06, pan });
+      break;
+    default:
+      // 'done' — a single settle tick, so the player knows without looking
+      partial(ac, out, { t, type: 'sine', freq: 900, peak: 0.045 * g, decay: 0.05 });
+      break;
+  }
+}
+
+/** raising or lowering the weapon: cloth, leather, and a breath */
+function weaponAim(ac, out, p, rng) {
+  const t = out.t, g = p.gain ?? 1;
+  const up = !!p.aiming;
+  burst(ac, out, {
+    t, dur: 0.13, type: 'bandpass', freq: up ? 1800 : 1300, Q: 0.7, peak: 0.055 * g,
+    attack: 0.03, sweepTo: up ? 2600 : 900, pan: (p.pan ?? 0) * 0.3,
+  });
+  partial(ac, out, { t: t + 0.02, type: 'sine', freq: up ? 640 : 480, peak: 0.022 * g, decay: 0.05 });
+}
+
+// ---------------------------------------------------------------------------
 // AMBIENT ONE-SHOTS
 // ---------------------------------------------------------------------------
 
@@ -695,6 +954,22 @@ export const CUES = {
   discover: { bus: 'sfx', fn: discover },
   whistle: { bus: 'sfx', fn: whistle },
 
+  // ---- bond spheres ----
+  sphere_throw: { bus: 'sfx', fn: sphereThrow },
+  sphere_hit: { bus: 'sfx', fn: sphereHit },
+  sphere_shake: { bus: 'sfx', fn: sphereShake },
+  sphere_caught: { bus: 'sfx', fn: sphereCaught },
+  sphere_escaped: { bus: 'sfx', fn: sphereEscaped },
+
+  // ---- weapons. Foley bus for the mechanical verbs (they are hands on metal),
+  // sfx for the report itself so it is not ducked with the footsteps.
+  weapon_fire: { bus: 'sfx', fn: weaponFire },
+  weapon_impact: { bus: 'foley', fn: weaponImpact },
+  weapon_flesh: { bus: 'foley', fn: weaponFlesh },
+  weapon_dry: { bus: 'foley', fn: weaponDry },
+  weapon_reload: { bus: 'foley', fn: weaponReload },
+  weapon_aim: { bus: 'foley', fn: weaponAim },
+
   bird: { bus: 'ambience', fn: bird },
   cricket: { bus: 'ambience', fn: cricket },
   insect: { bus: 'ambience', fn: insect },
@@ -708,4 +983,8 @@ export const CUES = {
 };
 
 /** cues that are texture rather than events — excluded from the "notable" log */
-export const AMBIENT_CUES = new Set(['step', 'creature_step', 'bird', 'cricket', 'insect', 'gust', 'lap', 'pad', 'bell', 'mpluck', 'tick']);
+export const AMBIENT_CUES = new Set(['step', 'creature_step', 'bird', 'cricket', 'insect', 'gust', 'lap', 'pad', 'bell', 'mpluck', 'tick',
+  // A held trigger fires ten of these a second. The SHOT is the event and stays in the
+  // notable log; where it landed is texture hung off it, and letting it in would push
+  // every other cue out of the six-entry window a critic actually reads.
+  'weapon_impact', 'weapon_aim']);

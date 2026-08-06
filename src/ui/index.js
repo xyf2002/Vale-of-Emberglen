@@ -228,6 +228,81 @@ const CSS = `
 #eg-ui .forage .lbl{font-family:var(--micro);font-size:calc(9.5*var(--s));font-weight:700;
   letter-spacing:.2em;text-transform:uppercase;text-shadow:var(--lift)}
 
+/* ---- THE HANDS ------------------------------------------------------------
+   Everything below appears only while something is actually in the traveller's hands
+   and is gone — display:none, not merely faded — the instant it is not. The default
+   state of this game is a walk in a meadow and the HUD has to keep saying so.
+
+   No new vocabulary: the crosshair is the same hairline-plus-legibility-shadow stroke
+   as the reticle ring, the carry counts reuse the satchel's serif numeral, the reload
+   is the vigour bar's bed-and-fill, and the catch odds are read on the naturalist's
+   four scratched strokes. ------------------------------------------------------- */
+
+/* the crosshair IS the cone of fire: the gap is the projected screen radius of
+   weapons.spreadDeg() at the live camera FOV, so what you see is what the gun does */
+#eg-ui .cross{position:absolute;left:50%;top:50%;will-change:opacity}
+/* Measured, not eyeballed: a 1.4px stroke lands between device pixels and antialiases
+   down to about half its brightness, and a blurred shadow underneath eats the rest —
+   at hip spread the ticks were physically correct and visually absent. 2.2 units gives
+   a stroke that always covers one whole pixel, and the shadow is the reticle's own
+   hard 1px drop plus a small halo rather than a wash. */
+#eg-ui .cross i{position:absolute;left:0;top:0;background:rgba(250,242,224,.96);
+  box-shadow:0 calc(1*var(--s)) 0 rgba(10,7,3,.85),0 0 calc(6*var(--s)) rgba(10,7,3,.8)}
+#eg-ui .cross .v{width:calc(2.2*var(--s));height:calc(11*var(--s))}
+#eg-ui .cross .h{width:calc(11*var(--s));height:calc(2.2*var(--s))}
+#eg-ui .cross .dot{width:calc(2.6*var(--s));height:calc(2.6*var(--s));border-radius:50%;
+  background:rgba(250,242,224,.98)}
+
+/* what is in the hands, stacked above the satchel and sharing its ink wash */
+#eg-ui .hand{position:absolute;right:calc(36*var(--s));bottom:calc(88*var(--s));
+  display:flex;flex-direction:column;align-items:flex-end;gap:calc(7*var(--s));
+  padding:calc(12*var(--s)) calc(16*var(--s));margin:calc(-12*var(--s)) calc(-16*var(--s));
+  background:radial-gradient(ellipse 76% 66% at 64% 50%,rgba(10,7,3,.58),rgba(10,7,3,0) 78%)}
+#eg-ui .hand .slots{display:flex;align-items:center;gap:calc(9*var(--s))}
+#eg-ui .hand .slots i{font-family:var(--micro);font-style:normal;font-size:calc(10*var(--s));
+  font-weight:700;letter-spacing:.1em;opacity:.36;position:relative;line-height:1;
+  text-shadow:0 calc(1*var(--s)) calc(2*var(--s)) rgba(12,8,4,.9)}
+#eg-ui .hand .slots i.on{opacity:1;color:var(--vellum);text-shadow:var(--lift)}
+#eg-ui .hand .slots i.on::after{content:"";position:absolute;left:50%;bottom:calc(-4*var(--s));
+  transform:translateX(-50%);width:calc(9*var(--s));height:calc(1.4*var(--s));background:var(--ember);
+  box-shadow:0 0 calc(7*var(--s)) rgba(231,155,66,.8)}
+#eg-ui .hand .slots .nm{font-family:var(--micro);font-size:calc(9.5*var(--s));font-weight:600;
+  letter-spacing:.22em;text-transform:uppercase;opacity:.82;margin-left:calc(4*var(--s));
+  text-shadow:var(--lift)}
+/* rounds: magazine in serif at satchel weight, reserve in the small tracked sans */
+#eg-ui .hand .rounds{display:flex;align-items:baseline;gap:calc(6*var(--s))}
+#eg-ui .hand .rounds .n{font-size:calc(22*var(--s));letter-spacing:.02em;line-height:1;
+  text-shadow:var(--lift)}
+#eg-ui .hand .rounds .n.low{color:#f0a94e}
+#eg-ui .hand .rounds .sl{font-family:var(--micro);font-size:calc(11*var(--s));opacity:.42}
+#eg-ui .hand .rounds .rs{font-family:var(--micro);font-size:calc(11.5*var(--s));font-weight:600;
+  letter-spacing:.14em;opacity:.6}
+#eg-ui .hand .orbs{display:flex;align-items:center;gap:calc(8*var(--s))}
+#eg-ui .hand .orbs svg{width:calc(22*var(--s));height:calc(22*var(--s));
+  filter:drop-shadow(0 calc(2*var(--s)) calc(3*var(--s)) rgba(10,7,3,.85))}
+#eg-ui .hand .orbs .x{font-family:var(--micro);font-size:calc(11*var(--s));opacity:.55}
+#eg-ui .hand .orbs .n{font-size:calc(22*var(--s));letter-spacing:.02em;line-height:1}
+/* the reload: the vigour bar's bed and fill, so progress is progress everywhere */
+#eg-ui .hand .rl{display:flex;align-items:center;gap:calc(9*var(--s));height:calc(11*var(--s))}
+#eg-ui .hand .rl .ph{font-family:var(--micro);font-size:calc(8.5*var(--s));font-weight:700;
+  letter-spacing:.2em;text-transform:uppercase;opacity:.7;text-shadow:var(--lift)}
+#eg-ui .hand .rl .vig{width:calc(74*var(--s));height:calc(3*var(--s))}
+#eg-ui .hand .rl .vig .fill{background:linear-gradient(90deg,#f0a94e,rgba(248,238,216,.9));
+  box-shadow:0 0 calc(8*var(--s)) rgba(231,155,66,.55)}
+
+/* the odds on a sphere throw: a world-anchored tag, in the marker's voice, never a panel */
+#eg-ui .odds{position:absolute;left:0;top:0;display:flex;flex-direction:column;
+  align-items:center;gap:calc(4*var(--s));white-space:nowrap;
+  padding:calc(9*var(--s)) calc(15*var(--s));margin:calc(-9*var(--s)) calc(-15*var(--s));
+  background:radial-gradient(ellipse 74% 62% at 50% 50%,rgba(10,7,3,.58),rgba(10,7,3,0) 78%)}
+#eg-ui .odds .band{display:flex;align-items:center;gap:calc(9*var(--s))}
+#eg-ui .odds .lbl{font-family:var(--micro);font-size:calc(10*var(--s));font-weight:700;
+  letter-spacing:.22em;text-transform:uppercase;text-shadow:var(--lift);color:#e8cf9e}
+#eg-ui .odds.good .lbl{color:#ffcf86}
+#eg-ui .odds .why{font-family:var(--micro);font-size:calc(8.5*var(--s));font-weight:600;
+  letter-spacing:.18em;text-transform:uppercase;opacity:.6;text-shadow:var(--lift)}
+#eg-ui .odds .tal i{height:calc(10*var(--s))}
+
 /* ---- the journal: the only filled surface in the game ---- */
 #eg-ui .scrim{position:absolute;inset:0;background:radial-gradient(120% 90% at 50% 50%,
   rgba(14,10,6,.36),rgba(14,10,6,.72));backdrop-filter:blur(calc(2*var(--s)))}
@@ -297,6 +372,19 @@ const berryGlyph = (size) => `<svg width="${size}" height="${size}" viewBox="0 0
 <circle cx="7.6" cy="13.2" r="1.5" fill="#e28f79" opacity=".8"/></g>
 <path d="M12 7.4 12 3.2" stroke="#7a5a2e" stroke-width="1.4" stroke-linecap="round" fill="none"/></svg>`;
 
+/**
+ * The bond sphere, drawn in the same ink as the berry: a rough-edged fill, one warm
+ * band, no bevel and no highlight sweep. It has to sit beside the berry glyph in the
+ * same row without either of them looking like it came from a different game.
+ */
+const orbGlyph = (size) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true">
+<g filter="url(#eg-rough)"><circle cx="12" cy="12" r="8.6" fill="#e2d6bc"/>
+<path d="M3.4 12a8.6 8.6 0 0 0 17.2 0z" fill="#b8a684"/>
+<circle cx="9.3" cy="8.6" r="1.7" fill="#fbf3e0" opacity=".75"/></g>
+<path d="M3.4 12h17.2" stroke="#e79b42" stroke-width="1.5" fill="none"/>
+<circle cx="12" cy="12" r="2.5" fill="none" stroke="#7a5a2e" stroke-width="1.3"/>
+<circle cx="12" cy="12" r="1" fill="#e79b42"/></svg>`;
+
 export function createUI() {
   let ctx, root, host;
   let creatures = null, interaction = null, player = null;
@@ -331,6 +419,11 @@ export function createUI() {
   const party = [];                       // [{ id, species, name, given }]
   const frg = { a: 0, text: '', edge: false, on: false };
   let goalT = 0, goalDone = false;   // the one line that says what the game is about
+
+  // ---- the hands: crosshair, carry counts, reload, catch odds ---------------
+  const cross = { a: 0, gap: 6 };
+  const hand = { a: 0, on: false, equipped: 'none', changeT: 0 };
+  const odds = { a: 0, on: false, target: null, chance: 0, band: '', why: '', lit: 0 };
 
   const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
   const approach = (a, b, rate, dt) => a + (b - a) * (1 - Math.exp(-rate * dt));
@@ -477,6 +570,15 @@ export function createUI() {
             <div class="act"><span class="key"></span><span class="vb"></span></div></div>
         </div>
 
+        <div class="cross" style="opacity:0;display:none">
+          <i class="v t"></i><i class="v b"></i><i class="h l"></i><i class="h r"></i>
+          <i class="dot"></i></div>
+
+        <div class="odds" style="opacity:0;display:none">
+          <div class="band"><span class="tal"><i></i><i></i><i></i><i></i><i></i></span
+            ><span class="lbl"></span></div>
+          <div class="why"></div></div>
+
         <div class="mark" style="opacity:0"><span class="tal"
           ><i></i><i></i><i></i><i></i></span><span class="lbl"></span></div>
 
@@ -506,6 +608,16 @@ export function createUI() {
 
         <div class="toasts sh"></div>
 
+        <div class="hand sh" style="display:none">
+          <div class="slots"><i>1</i><i>2</i><i>3</i><i>4</i><span class="nm"></span></div>
+          <div class="orbs" style="display:none">${orbGlyph(22)}<span
+            class="x">&times;</span><span class="n">0</span></div>
+          <div class="rounds" style="display:none"><span class="n">0</span><span
+            class="sl">/</span><span class="rs">0</span></div>
+          <div class="rl" style="display:none"><span class="ph"></span>
+            <span class="vig"><i class="bed"></i><i class="fill"></i></span></div>
+        </div>
+
         <div class="satchel sh">${berryGlyph(23)}<span class="x">&times;</span><span class="n">0</span></div>
 
         <div class="jcue sh" style="opacity:0"><span class="lbl">Field journal</span><span class="key">J</span></div>
@@ -526,6 +638,27 @@ export function createUI() {
       el.retCost = host.querySelector('.ret .md .cost');
       el.retKey = host.querySelector('.ret .key');
       el.retVerb = host.querySelector('.ret .vb');
+      el.cross = host.querySelector('.cross');
+      el.crossTicks = {
+        t: host.querySelector('.cross .t'), b: host.querySelector('.cross .b'),
+        l: host.querySelector('.cross .l'), r: host.querySelector('.cross .r'),
+        dot: host.querySelector('.cross .dot'),
+      };
+      el.odds = host.querySelector('.odds');
+      el.oddsTally = [...host.querySelectorAll('.odds .tal i')];
+      el.oddsLbl = host.querySelector('.odds .lbl');
+      el.oddsWhy = host.querySelector('.odds .why');
+      el.hand = host.querySelector('.hand');
+      el.handSlots = [...host.querySelectorAll('.hand .slots i')];
+      el.handName = host.querySelector('.hand .slots .nm');
+      el.orbs = host.querySelector('.hand .orbs');
+      el.orbN = host.querySelector('.hand .orbs .n');
+      el.rounds = host.querySelector('.hand .rounds');
+      el.roundsN = host.querySelector('.hand .rounds .n');
+      el.roundsRs = host.querySelector('.hand .rounds .rs');
+      el.rl = host.querySelector('.hand .rl');
+      el.rlPhase = host.querySelector('.hand .rl .ph');
+      el.rlFill = host.querySelector('.hand .rl .vig .fill');
       el.mark = host.querySelector('.mark');
       el.markTally = [...host.querySelectorAll('.mark .tal i')];
       el.markLbl = host.querySelector('.mark .lbl');
@@ -624,6 +757,18 @@ export function createUI() {
       };
       c.bus.on('item:gathered', gathered);
       c.bus.on('resource:gathered', gathered);
+
+      // A swap to EMPTY HANDS still deserves an acknowledgement, or pressing "1" looks
+      // like the key did nothing. The block lingers a couple of seconds and then goes.
+      c.bus.on('loadout:change', () => { hand.changeT = 2.4; });
+      // The sphere burst open and the creature is loose: the odds the player was shown
+      // have just changed, and the line under them is the reason.
+      c.bus.on('sphere:escaped', ({ creature }) => {
+        api.notify(`${creature?.def?.name ?? 'It'} bursts out.`, { ttl: 3.0 });
+      });
+      c.bus.on('creature:exhausted', ({ creature }) => {
+        api.notify(`${creature?.def?.name ?? 'It'} is winded — it will not run far now.`, { ttl: 4.0 });
+      });
     },
 
     update(dt, c) {
@@ -634,8 +779,11 @@ export function createUI() {
       if (c.input.justPressed('journal')) this.setJournalOpen(!journalOpen);
 
       updateVitals(dt, c);
+      updateOdds(dt, c);
       updateReticle(dt, c);
       updateMarker(dt, c);
+      updateCrosshair(dt, c);
+      updateHand(dt, c);
       updateForage(dt, c);
       updateBond(dt);
       scanDiscoveries(c, dt);
@@ -750,6 +898,22 @@ export function createUI() {
         visible.push(`${'●'.repeat(mrk.stage)}${'○'.repeat(Math.max(0, 4 - mrk.stage))} ${mrk.text}`);
       }
       if (frg.a > 0.15 && frg.on) visible.push(frg.text);
+      if (odds.a > 0.2 && odds.target) {
+        visible.push(`${'●'.repeat(odds.lit)}${'○'.repeat(Math.max(0, 5 - odds.lit))} ${odds.band.toUpperCase()}`);
+        if (odds.why) visible.push(odds.why.toUpperCase());
+      }
+      if (hand.a > 0.2) {
+        const w = ctx?.get?.('weapons');
+        const sp = ctx?.get?.('spheres');
+        visible.push(`In hand: ${SLOT_SHORT[hand.equipped] ?? hand.equipped}`);
+        if (hand.equipped === 'sphere') visible.push(`Spheres ×${sp?.count?.() ?? 0}`);
+        if (hand.equipped === 'pistol' || hand.equipped === 'rifle') {
+          const a = w?.ammo?.() ?? { inMag: 0, reserve: 0 };
+          visible.push(`${a.inMag} / ${a.reserve}`);
+          const rl = w?.reloading?.() ?? 0;
+          if (rl > 0) visible.push(`${PHASE_WORDS[w?.reloadPhase?.()] ?? 'Reloading'} ${Math.round(rl * 100)}%`);
+        }
+      }
       if (bond.a > 0.2) visible.push(bond.eyebrow, bond.line);
       if (journalA < 0.5) for (const t2 of toasts) if (t2.el.style.opacity > 0.3) visible.push(t2.read ?? t2.text);
       if (party.length && journalA < 0.5) {
@@ -772,6 +936,10 @@ export function createUI() {
         berries,
         party: party.map((p) => ({ id: p.id, species: p.species, given: p.given })),
         bond: bond.a > 0.2 ? { name: bond.name, line: bond.line } : null,
+        hands: hand.a > 0.2 ? { equipped: hand.equipped, crosshairGapPx: +cross.gap.toFixed(1) } : null,
+        odds: odds.a > 0.2 && odds.target
+          ? { species: odds.target.species, chance: +odds.chance.toFixed(3), band: odds.band, why: odds.why, strokes: odds.lit }
+          : null,
       };
     },
   };
@@ -788,6 +956,218 @@ export function createUI() {
     const inv = c.get('interaction')?.inventory;
     if (inv && typeof inv.berry === 'number') berries = inv.berry;
     setText(el.berries, String(berries));
+  }
+
+  // =========================================================================
+  // THE HANDS
+  // =========================================================================
+
+  /**
+   * THE CROSSHAIR IS THE CONE.
+   *
+   * `weapons.spreadDeg()` is the half-angle the next round is actually drawn from, so
+   * the gap between the four strokes is that angle PROJECTED — the exact screen radius
+   * the round could land within at the live FOV:
+   *
+   *     gap_px = (h / 2) * tan(spread) / tan(fov / 2)
+   *
+   * There is no cosmetic bloom animation anywhere in this file and there must not be.
+   * The crosshair opening when you walk, snapping shut when you settle into aim, and
+   * kicking wide with each round is the gun's own number arriving on screen unedited —
+   * which is the only reason a player can learn the weapon by watching it.
+   *
+   * The strokes are hairlines with the same legibility shadow as the reticle ring; the
+   * ink weight is a design constant in `--s`, the gap is physics in real pixels.
+   */
+  function updateCrosshair(dt, c) {
+    const loadout = c.get('loadout');
+    const weapons = c.get('weapons');
+    const gun = !!(loadout && (loadout.is('pistol') || loadout.is('rifle')) && weapons);
+    const reloading = gun ? (weapons.reloading?.() ?? 0) : 0;
+    // a gun that cannot fire should not draw a promise across the middle of the frame
+    const want = gun && !journalOpen ? (reloading > 0 ? 0.34 : 0.9) : 0;
+    cross.a = approach(cross.a, want, 13, dt);
+
+    if (cross.a < 0.004) {
+      if (el.cross.style.display !== 'none') el.cross.style.display = 'none';
+      cross.a = 0;
+      return;
+    }
+    if (el.cross.style.display === 'none') el.cross.style.display = '';
+    el.cross.style.opacity = cross.a.toFixed(3);
+
+    if (gun) {
+      const h = c.renderer.domElement.clientHeight || window.innerHeight;
+      const fov = (c.camera.fov ?? 62) * Math.PI / 180;
+      const spread = (weapons.spreadDeg?.() ?? 1) * Math.PI / 180;
+      cross.gap = (h * 0.5) * Math.tan(spread) / Math.max(1e-4, Math.tan(fov * 0.5));
+    }
+    const g = Math.max(2.5, cross.gap).toFixed(1);
+    el.crossTicks.t.style.transform = `translate(-50%,-100%) translateY(${-g}px)`;
+    el.crossTicks.b.style.transform = `translate(-50%,0) translateY(${g}px)`;
+    el.crossTicks.l.style.transform = `translate(-100%,-50%) translateX(${-g}px)`;
+    el.crossTicks.r.style.transform = `translate(0,-50%) translateX(${g}px)`;
+    el.crossTicks.dot.style.transform = 'translate(-50%,-50%)';
+  }
+
+  const PHASE_WORDS = { magout: 'Magazine out', magin: 'Fresh magazine', charge: 'Charging' };
+  const SLOT_SHORT = { none: 'Empty hands', sphere: 'Bond Sphere', pistol: 'Sidearm', rifle: 'Carbine' };
+
+  /**
+   * What is in the hands: the four slots, the count of the thing you are holding, and —
+   * when a gun is reloading — the reload as a filling bar rather than a spinner, because
+   * the whole point of a three-phase reload is that a player can learn to cancel it.
+   *
+   * The block does not exist when the hands are empty. It is the single rule that keeps
+   * this from becoming a shooter HUD bolted to a game about berries.
+   */
+  function updateHand(dt, c) {
+    const loadout = c.get('loadout');
+    const weapons = c.get('weapons');
+    const spheres = c.get('spheres');
+    const eq = loadout?.equipped?.() ?? 'none';
+    hand.equipped = eq;
+    hand.changeT = Math.max(0, hand.changeT - dt);
+
+    // an empty-handed traveller is the default state and gets nothing at all — but a
+    // deliberate press of "1" still deserves the courtesy of a confirmation
+    hand.on = !!loadout && (eq !== 'none' || hand.changeT > 0) && !journalOpen;
+    hand.a = approach(hand.a, hand.on ? 1 : 0, hand.on ? 12 : 6, dt);
+
+    if (hand.a < 0.004) {
+      if (el.hand.style.display !== 'none') {
+        el.hand.style.display = 'none';
+        el.toasts.style.bottom = 'calc(66*var(--s))';
+      }
+      hand.a = 0;
+      return;
+    }
+    if (el.hand.style.display === 'none') {
+      el.hand.style.display = '';
+      el.toasts.style.bottom = 'calc(156*var(--s))';   // the stack steps over the block
+    }
+    el.hand.style.opacity = (hand.a * (1 - journalA)).toFixed(3);
+    el.hand.style.transform = `translateY(${((1 - hand.a) * 8).toFixed(1)}px)`;
+
+    const slots = loadout?.slots?.() ?? [];
+    for (let i = 0; i < el.handSlots.length; i++) {
+      el.handSlots[i].className = slots[i]?.active ? 'on' : '';
+    }
+    setText(el.handName, slots.find((s) => s.active)?.name ?? SLOT_SHORT[eq] ?? '');
+
+    // ---- spheres --------------------------------------------------------
+    const showOrbs = eq === 'sphere';
+    if (el.orbs.style.display !== (showOrbs ? '' : 'none')) el.orbs.style.display = showOrbs ? '' : 'none';
+    if (showOrbs) setText(el.orbN, String(spheres?.count?.() ?? 0));
+
+    // ---- rounds ---------------------------------------------------------
+    const gun = eq === 'pistol' || eq === 'rifle';
+    if (el.rounds.style.display !== (gun ? '' : 'none')) el.rounds.style.display = gun ? '' : 'none';
+    const rl = gun ? (weapons?.reloading?.() ?? 0) : 0;
+    if (gun) {
+      const a = weapons?.ammo?.() ?? { inMag: 0, reserve: 0, magSize: 1 };
+      setText(el.roundsN, String(a.inMag));
+      setText(el.roundsRs, String(a.reserve));
+      // the last quarter of a magazine lights ember, the same warning colour the
+      // reticle uses for "one berry to go"
+      const low = a.magSize > 0 && a.inMag <= Math.ceil(a.magSize * 0.25);
+      el.roundsN.className = low ? 'n low' : 'n';
+      el.rounds.style.opacity = rl > 0 ? '0.42' : '1';
+    }
+    const showRl = gun && rl > 0;
+    if (el.rl.style.display !== (showRl ? '' : 'none')) el.rl.style.display = showRl ? '' : 'none';
+    if (showRl) {
+      setText(el.rlPhase, PHASE_WORDS[weapons?.reloadPhase?.()] ?? 'Reloading');
+      el.rlFill.style.width = `${(rl * 100).toFixed(1)}%`;
+    }
+  }
+
+  /**
+   * THE ODDS ON A THROW — and why they are words rather than a percentage.
+   *
+   * The number exists: `spheres.aimTarget().chance` is the real probability, and it is
+   * tempting to print "43%". Two reasons not to. The first is voice: this HUD prints
+   * exactly two kinds of number — a count of things you are carrying and a count of
+   * things you have recorded — and a live percentage over a creature's head turns a
+   * meadow into a slot machine, which is the one register the whole field-kit language
+   * was built to avoid. The second is that a percentage answers the wrong question. The
+   * player does not need three significant figures; they need to know that the thing
+   * they DID moved the number, and in which direction.
+   *
+   * So it is a band plus a cause, and the bands are chosen to land one apiece on the
+   * rungs of the berry ladder (see spheres/Catch.js), so the arc is legible as an arc:
+   *
+   *   never fed   5.7%  -> "it will burst out"
+   *   patience   20.4%  -> "a long shot"
+   *   one berry  42.7%  -> "even odds"
+   *   two berries 89.5% -> "all but certain"
+   *
+   * Under it, in the smallest type on screen, the reason: "one berry in", "still
+   * eating", "shy of spheres". That line is the join between the two loops — it is what
+   * tells a player that feeding is not an alternative to the sphere but the thing that
+   * makes the sphere work. And the five scratched strokes carry the continuous value the
+   * words round off, in the same tally the reticle already uses to count berries owed.
+   */
+  const ODDS_BANDS = [
+    [0.80, 'All but certain'], [0.55, 'Likely to hold'], [0.30, 'Even odds'],
+    [0.15, 'A long shot'], [0, 'It will burst out'],
+  ];
+
+  function oddsWhy(f) {
+    const parts = [];
+    parts.push(f.trust >= 0.62 ? 'Two berries in'
+      : f.trust >= 0.30 ? 'One berry in'
+        : f.trust >= 0.12 ? 'Warming to you' : 'Never fed');
+    if (f.settling > 0.02) parts.push('still eating');
+    if (f.startled >= 0.9) parts.push('panicking');
+    else if (f.startled > 0) parts.push('unsettled');
+    if (f.tired > 0.05) parts.push('winded');
+    if (f.wary > 0) parts.push('shy of spheres');
+    // Four, not three. At three, a creature that had just burst out lost "shy of
+    // spheres" off the end of the line — the single factor working AGAINST the throw,
+    // trimmed, on the one occasion the player most needed to see it.
+    return parts.slice(0, 4).join(' · ');
+  }
+
+  function updateOdds(dt, c) {
+    const loadout = c.get('loadout');
+    const spheres = c.get('spheres');
+    const t = loadout?.is?.('sphere') && !journalOpen ? spheres?.aimTarget?.() ?? null : null;
+    odds.on = !!(t && t.creature);
+    odds.target = odds.on ? t.creature : null;
+
+    if (odds.on) {
+      odds.chance = t.chance ?? 0;
+      odds.band = (ODDS_BANDS.find(([lo]) => odds.chance >= lo) ?? ODDS_BANDS[4])[1];
+      odds.why = oddsWhy(t.factors ?? { trust: 0, settling: 0, startled: 0, tired: 0, wary: 0 });
+      odds.lit = Math.min(5, Math.ceil(odds.chance * 5));
+      setText(el.oddsLbl, odds.band);
+      setText(el.oddsWhy, odds.why);
+      el.odds.classList.toggle('good', odds.chance >= 0.55);
+      for (let i = 0; i < el.oddsTally.length; i++) {
+        el.oddsTally[i].className = i < odds.lit ? (odds.lit >= 5 ? 'done' : 'on') : '';
+      }
+
+      const cr = odds.target;
+      const s = project(c, cr.position, (cr.def?.size ?? 1) * 1.5 + 0.45);
+      const w = c.renderer.domElement.clientWidth || window.innerWidth;
+      const h = c.renderer.domElement.clientHeight || window.innerHeight;
+      if (s.z < 1) {
+        const x = Math.max(120, Math.min(w - 120, s.x));
+        const y = Math.max(52, Math.min(h - 150, s.y));
+        el.odds.style.transform =
+          `translate3d(${x.toFixed(1)}px,${y.toFixed(1)}px,0) translate(-50%,-50%)`;
+      }
+    }
+
+    odds.a = approach(odds.a, odds.on ? 1 : 0, odds.on ? 10 : 7, dt);
+    if (odds.a < 0.004) {
+      if (el.odds.style.display !== 'none') el.odds.style.display = 'none';
+      odds.a = 0;
+      return;
+    }
+    if (el.odds.style.display === 'none') el.odds.style.display = '';
+    el.odds.style.opacity = odds.a.toFixed(3);
   }
 
   // ------------------------------------------------------------------ reticle
@@ -874,7 +1254,10 @@ export function createUI() {
       ret.onScreen = false;
     }
 
-    const want = focus && currentPrompt && ret.onScreen && !journalOpen ? 1 : 0;
+    // Two cards on one animal is a bug, not information. While a sphere is up and the
+    // odds tag has this creature, the odds tag speaks for it.
+    const owned = odds.on && odds.target === focus;
+    const want = focus && currentPrompt && ret.onScreen && !journalOpen && !owned ? 1 : 0;
     ret.a = approach(ret.a, want, 11, dt);
 
     if (ret.a < 0.004) { el.ret.style.opacity = '0'; return; }

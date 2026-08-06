@@ -2,7 +2,7 @@
   "goal": "A 5-minute playable vertical slice that captures the core fantasy of Palworld: a beautiful third-person world, charming creatures, meaningful interaction, and believable creature behaviour.",
   "bar": "The real Palworld. A fresh critic is shown our capture beside an official Palworld frame — same shot type, same resolution, same format, labels stripped, order shuffled — and asked which one is the shipped commercial game. We are done when critics stop reliably picking correctly.",
   "currentRound": "r12",
-  "currentState": "Round 11 fixed cast shadows, which a blind critic had named as upstream of most remaining visual complaints. They were not rendering at all: switching the shadow map off moved the mean pixel by 0.362/255. Four compounding causes, each measured and each real — an unshadowed fill out-contributing the shadow-casting key 2:1, a sun arc so tall that shadows hid under the things casting them, a sun azimuth within 8 degrees of dead behind the lens on three of five daylight shots, and a shadow frustum that never contained the hillside the critics kept pointing at. Trees, rocks, terrain and the player now throw visibly correct shadows and the diff is 0.773/255.\n\nThe number is still far below its 8/255 target, and round 12 is chasing why: it is no longer a rendering fault. Packing all 4096 shadow texels onto a 30 m box made near-field shadow WORSE, not better. The first 25 metres of the meadow are simply empty — bare grass carpet with no rocks, no ferns, no fallen wood — so a correct shadow system has nothing to cast. Two builders are running: near-field density, and the dusk frame.",
+  "currentState": "Round 12 is the widest round yet: six builders on disjoint directories. Three are closing the gaps the r11 blind critic named — the empty near field, the flat dusk frame, and creatures that read as 'lit from every direction equally'. Three are building two new mechanics the user asked for: throw-to-capture Bond Spheres, and a GTA-feel firearms module.\n\nThe near field has already changed character — the bare grass carpet is now layered clumps, flowers and foreground detail — at 250 draws / 1.74M triangles against a 300 / 2.2M budget. All six systems boot together and capture cleanly.",
   "pickRate": "0% across r08, r10 and r11 — a blind critic has identified our frame as the in-dev one in 15 of 15 pairs. In r11 every verdict came back at confidence 5. Art direction, judged as a separate question, went 1 of 5 to us (the creature group: 'B's frame is calm and legible... as a picture, B is the better-composed one').",
   "metrics": {
     "caption": "Objective guardrails, measured with tools/measure.py against the real reference frames. Not the bar — a critic's eye is — but they stop arguments about whether a change helped. Two bands were corrected in r08 after being measured from the reference rather than invented.",
@@ -77,6 +77,24 @@
   ],
   "rounds": [
     {
+      "id": "r12",
+      "title": "Near field, dusk, creature shading — and two new mechanics",
+      "date": "2026-08-03",
+      "status": "running",
+      "summary": "Split across two fronts. The first three builders answer the r11 critic directly: it ranked 'nothing in the in-dev world casts or receives light locally' as the single biggest gap, ahead of atmospheric depth and terrain variety. The other three add throw-to-capture and firearms.\n\nThe design decision that makes the two new mechanics one feature rather than two: catch chance is read straight off the trust the berries bought. Feeding is not made obsolete by the sphere — it is what makes the sphere work. And the guns exist to weaken and stagger a creature so a sphere will hold it, which is the only framing in which firearms belong in a game about befriending things. There is no death anywhere in the build.",
+      "improvements": [
+        "Bond Spheres: aim arc showing the ACTUAL trajectory, ballistic throw, pull-in, 1-3 wobbles with rising tension, catch or break-out. Three independent RNG streams so adding a spark to the trail cannot change who gets caught.",
+        "Firearms with GTA's specific feel: aim as a state with an asymmetric 0.2s in / 0.45s out ramp, spread as a live number the reticle IS rather than a cosmetic bloom, recoil as two springs plus a leaky residual applied to the ROUND and not just the picture, phased interruptible reload, surface-aware impacts.",
+        "Loadout system: absolute slots 1-4 rather than a cycle, because a cycle key is miserable when one of four items is a weapon you did not mean to raise at a creature you were about to befriend. The swap is not instant and gates both consumers by construction.",
+        "Near field filled: the first 25 metres went from bare grass carpet to layered clumps, flowers and foreground detail."
+      ],
+      "gaps": [
+        "Integration is still in flight: the aim camera, the HUD reticle and ammo readout, the audio cues and the creature stagger reaction all exist as contracts that nothing consumes yet.",
+        "No blind A/B has been run against r12 yet. The r11 build was identified 5 of 5 at confidence 5."
+      ],
+      "shots": []
+    },
+    {
       "id": "r11",
       "title": "Cast shadows actually render",
       "date": "2026-08-03",
@@ -94,10 +112,11 @@
         "Grass casting was tried and measured as a null result. Recorded in the source rather than silently dropped."
       ],
       "shots": [
-        "captures/r11/vista_golden.png",
-        "captures/r11/overshoulder_meadow.png",
-        "captures/r11/dusk_mood.png",
-        "captures/_shadowviz/diff_over_30_nopost.png"
+        "vista_golden.png",
+        "overshoulder_meadow.png",
+        "dusk_mood.png",
+        "creature_portrait.png",
+        "creature_group.png"
       ],
       "critique": {
         "verdict": "5 of 5 identified as the in-dev build, every one at confidence 5. Art direction 1 of 5 to us.",
@@ -123,6 +142,13 @@
       ],
       "gaps": [
         "Cast shadows still absent — the round's whole purpose"
+      ],
+      "shots": [
+        "vista_golden.png",
+        "overshoulder_meadow.png",
+        "dusk_mood.png",
+        "creature_portrait.png",
+        "creature_group.png"
       ]
     },
     {

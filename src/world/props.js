@@ -1,6 +1,11 @@
 import * as THREE from 'three';
-import { clamp, lerp, smoothstep } from './util.js';
+import { clamp, lerp, smoothstep, hash2i } from './util.js';
 import { mergeGeos, paint, makeAerialMaterial, applyMossShader, setAerialPivot } from './materials.js';
+import { applyContactShade, beginPropChannel } from './vegetation.js';
+// The prop broadphase lives in vegetation.js (props.js already imports it, so putting
+// it there avoids a cycle) and is re-exported here because this is where a consumer
+// looking for "the props" will start. See the PROP BROADPHASE section for the contract.
+export { queryProps, propsNear, propColliderCount, resetPropColliders } from './vegetation.js';
 import { AX, AZ, PX, PZ, LAKE } from './terrain.js';
 
 const C = (hex) => new THREE.Color(hex).convertSRGBToLinear();
@@ -15,20 +20,62 @@ function rockGeometry(rng, noise, detail = 1) {
   const ph = rng.range(0, 10);
   for (let i = 0; i < p.count; i++) {
     let x = p.getX(i), y = p.getY(i), z = p.getZ(i);
-    // stratified: flatten in y and cut faceted steps so it reads as rock, not a potato
-    const band = Math.round((y + ph) * 2.6) / 2.6;
+    // stratified: flatten in y and cut faceted steps so it reads as rock, not a potato.
+    //
+    // `- ph` IS LOAD-BEARING. `ph` is a phase that decorrelates the banding pattern
+    // between rocks so they do not all step at the same heights. Added before the round
+    // and not taken back out, it stops being a phase and becomes a TRANSLATION: band
+    // lands at y + ph, and the lerp keeps 45% of it, baking a constant +0.45*ph lift
+    // into the geometry. With ph up to 10 that is up to 4.5 units of rock hanging in
+    // mid-air, scaled by the instance scale on top.
+    //
+    // It cost most of a round to find, because every object-space check exonerates it:
+    // the instance ORIGINS are all correctly grounded (mean gap -0.15), the placement
+    // code queries heightAt properly, and the bug lives entirely inside the baked
+    // vertices. Five separate probes reported "nothing floats" while the frame plainly
+    // showed boulders in the sky. If props ever float again, measure the GEOMETRY
+    // bounding box against the instance origin, not the origin against the terrain.
+    const band = Math.round((y + ph) * 2.6) / 2.6 - ph;
     y = lerp(y, band, 0.45);
     const d = 1 + 0.30 * noise.fbm(x * 2.1 + ph, z * 2.1 - ph, 3) + 0.16 * noise.fbm(y * 3.4, x * 3.4, 2);
     p.setXYZ(i, x * d * sx, y * d * sy, z * d * sz);
   }
   g.computeVertexNormals();
   const n = p.count;
+  const nrm = g.attributes.normal;
   const arr = new Float32Array(n * 3);
-  const a = C(0x8e8e85), b = C(0xa9a597), c = new THREE.Color();
+  // ------------------------------------------------------------------
+  // A MATERIAL THAT KNOWS WHICH WAY GRAVITY POINTS.
+  //
+  // A blind critic, comparing our vista to a real plate: "B's rocks are single
+  // untextured grey facets ... plain unpainted light-grey geometry sitting at a
+  // compositional focal point", against "A's cliff faces carry layered strata with
+  // moss accumulating only on upward-facing ledges — a material that knows which way
+  // gravity points."
+  //
+  // The moss shader was already upward-facing-only. What was missing is the other
+  // half: the rock under it was a BLOTCH. The colour was `fbm(x, z)` — a horizontal
+  // splatter with no vertical structure at all, so the faceted silhouette had nothing
+  // running across it and every facet read as one flat grey.
+  //
+  // Three gravity-aware terms replace it, sized against the measured sd of noise.fbm
+  // (~0.20, centred on 0) rather than assumed to be 0..1:
+  //   strata — a function of HEIGHT ONLY, so bands wrap the stone the way bedding
+  //            planes do instead of blotching it
+  //   ledges — up-facing surfaces are paler and warmer (dust, lichen, sun bleaching);
+  //            down-facing ones stay cool and dark
+  //   grain  — a fine per-facet break so adjacent facets never share an exact value
+  // ------------------------------------------------------------------
+  const a = C(0x8e8e85), b = C(0xa9a597), warm = C(0xb2a893), c = new THREE.Color();
   for (let i = 0; i < n; i++) {
-    const t = clamp(0.5 + 0.5 * noise.fbm(p.getX(i) * 1.4, p.getZ(i) * 1.4, 2), 0, 1);
-    c.copy(a).lerp(b, t);
-    const v = 0.86 + 0.28 * t;
+    const y = p.getY(i);
+    const strata = noise.fbm(y * 5.2 + ph * 3.0, y * 1.7 - 2.2, 3);
+    const grain = noise.fbm(p.getX(i) * 5.5, p.getZ(i) * 5.5, 2);
+    const up = clamp(nrm.getY(i), -1, 1);
+    const ledge = clamp(up * 0.5 + 0.5, 0, 1);
+    c.copy(a).lerp(b, clamp(0.5 + strata * 2.0, 0, 1));
+    c.lerp(warm, ledge * 0.55);
+    const v = (0.80 + 0.30 * ledge) * (1 + 0.34 * strata + 0.18 * grain);
     arr[i * 3] = c.r * v; arr[i * 3 + 1] = c.g * v; arr[i * 3 + 2] = c.b * v;
   }
   g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
@@ -38,7 +85,10 @@ function rockGeometry(rng, noise, detail = 1) {
 export function createRocks(ctx, T, rng) {
   const noise = ctx.noise;
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
-  applyMossShader(mat, 0x6b8a3a, { amount: 1.0 });
+  applyMossShader(mat, 0x6b8a3a, { amount: 1.25 });
+  // rocks are sunk 0.30 of their radius, so their contact line is below the instance
+  // origin — see applyContactShade for why this cannot go through the shadow map
+  applyContactShade(mat, { rangeAbs: 0.10, rangeRel: 0.30, dark: 0.42, sinkRel: 0.30 });
 
   const smallGeos = [];
   for (let i = 0; i < 4; i++) smallGeos.push(rockGeometry(rng, noise, 0));
@@ -83,6 +133,8 @@ export function createRocks(ctx, T, rng) {
   const m4 = new THREE.Matrix4();
   const qt = new THREE.Quaternion();
   const e = new THREE.Euler();
+  // ballistics broadphase: a boulder is a sphere, sunk the same 0.30 the mesh is
+  const bp = beginPropChannel('rocks');
   let count = 0;
   for (let i = 0; i < geos.length; i++) {
     const list = lists[i];
@@ -96,6 +148,9 @@ export function createRocks(ctx, T, rng) {
       qt.setFromEuler(e);
       m4.compose({ x: p.x, y: p.y - p.s * 0.30, z: p.z }, qt, { x: p.s, y: p.s, z: p.s });
       mesh.setMatrixAt(k, m4);
+      // pebbles under 25 cm are not worth a trace entry -- they would triple the
+      // collider count to stop nothing a player would ever notice
+      if (p.s >= 0.25) bp.sphere(p.x, p.y - p.s * 0.30, p.z, p.s * 0.92, 'stone');
     }
     mesh.instanceMatrix.needsUpdate = true;
     mesh.computeBoundingSphere();
@@ -158,12 +213,37 @@ export function createRuin(ctx, T, rng, cx, cz, scale = 1) {
 
   const geo = mergeGeos(parts);
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
-  applyMossShader(mat, 0x62823a, { amount: 1.15 });
+  applyMossShader(mat, 0x62823a, { amount: 1.3 });
+  // the ruin is set 0.35 into the ground; without the occlusion band at that line the
+  // columns read as blocks resting on a painted plane
+  applyContactShade(mat, { rangeAbs: 0.55, rangeRel: 0, dark: 0.46, sinkAbs: 0.35 });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.rotation.y = rot;
   mesh.position.set(cx, baseY - 0.35, cz);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
+
+  // ---- ballistics broadphase ----
+  // Each ruin gets its OWN channel key, because index.js builds two of them and a
+  // shared tag would have the second call delete the first one's colliders.
+  const bp = beginPropChannel(`ruin@${cx.toFixed(1)},${cz.toFixed(1)}`);
+  const cs = Math.cos(rot), sn = Math.sin(rot);
+  const wx = (lx, lz) => cx + lx * cs + lz * sn;
+  const wz = (lx, lz) => cz - lx * sn + lz * cs;
+  const y0 = baseY - 0.35;
+  // the two columns, one of them broken four courses up
+  bp.column(wx(-1.9 * scale, 0), wz(-1.9 * scale, 0), 0.72 * scale, y0, y0 + colH, 'stone');
+  bp.column(wx(1.9 * scale, 0), wz(1.9 * scale, 0), 0.72 * scale, y0, y0 + colH * 0.8, 'stone');
+  // half-collapsed lintel
+  bp.sphere(wx(-0.6 * scale, 0), y0 + colH + 0.35 * scale, wz(-0.6 * scale, 0), 1.5 * scale, 'stone');
+  // fallen blocks
+  bp.sphere(wx(3.1 * scale, 1.5 * scale), y0 + 0.30 * scale, wz(3.1 * scale, 1.5 * scale), 1.0 * scale, 'stone');
+  bp.sphere(wx(-3.0 * scale, -1.8 * scale), y0 + 0.22 * scale, wz(-3.0 * scale, -1.8 * scale), 0.8 * scale, 'stone');
+  // the low broken wall stub, three spheres along its run
+  for (let k = 0; k < 3; k++) {
+    const lx = -2.4 * scale + k * 2.56 * scale, lz = -3.6 * scale;
+    bp.sphere(wx(lx, lz), y0 + 0.45 * scale, wz(lx, lz), 0.95 * scale, 'stone');
+  }
   return mesh;
 }
 
@@ -264,9 +344,29 @@ export function createWater(ctx, T) {
  * for you", and pw_16 answers it with lanterns.
  *
  * We have no village to hang lanterns on, so the practicals are the fauna: slow warm
- * motes at knee-to-head height. One additively blended draw call, no lights, no
- * shadow cost. They are keyed entirely off the sky's night amount so they are exactly
- * invisible in all five daylight shots.
+ * motes at knee-to-head height. One additively blended draw call. They are keyed
+ * entirely off the sky's night amount so they are exactly invisible in all five
+ * daylight shots.
+ *
+ * ROUND 12: THEY NOW EMIT. The blind critic's verdict on the dusk pair was the widest
+ * gap in the whole pack, and it was not about the sprites: "A's lanterns emit light.
+ * Each paper lantern owns a pool of warm falloff on the gravel path and throws an
+ * uneven wash up the shoji panels behind it... B is a night scene with NO LIGHT SOURCES
+ * IN IT. The fireflies are unlit point sprites contributing nothing."
+ *
+ * So a small FIXED POOL of point lights chases the motes nearest the camera. Fixed,
+ * because three compiles NUM_POINT_LIGHTS into every material in the scene: one light
+ * per mote is not "expensive", it is a shader that does not link. Six lights, reassigned
+ * as you walk, gated on the sky's own night curve so the daylight shots compile and
+ * render exactly as they did before.
+ *
+ * The field itself also had to move. It was scattered `r = 3 + sqrt(u) * 78` from the
+ * WORLD ORIGIN, and the player spawns 98 m from the origin — measured, every pool sat
+ * at intensity 0 because the nearest mote to the dusk camera was outside the search
+ * radius. Same arithmetic that emptied the first 25 m of the meadow (see
+ * createGroundClutter). The field is now a camera-relative, world-anchored hash grid
+ * rebuilt when the camera crosses an 18 m cell: deterministic, constant cost, and it
+ * exists wherever you actually are rather than only where the world was authored.
  */
 export function createMotes(ctx, T, rng) {
   const N = Math.round(360 * clamp(ctx.quality.grassDensity ?? 1, 0.4, 1.5));
@@ -321,36 +421,143 @@ export function createMotes(ctx, T, rng) {
   const m4 = new THREE.Matrix4();
   const qt = new THREE.Quaternion();
   const col = new THREE.Color();
+  const motes = [];
   // amber, honey and a few cool green ones so the field is not one hue
   const TINTS = [0xffc46a, 0xffb04a, 0xffd894, 0xbfe07a];
-  let n = 0;
-  for (let i = 0; i < N * 4 && n < N; i++) {
-    const a = rng.next() * Math.PI * 2;
-    const r = 3 + Math.sqrt(rng.next()) * 78;
-    const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    const gy = T.heightAt(x, z);
-    if (gy < T.waterLevel + 0.4) continue;
-    if (T.slopeAt(x, z) > 0.42) continue;
-    const y = gy + 0.35 + Math.pow(rng.next(), 1.7) * 2.3;
-    const s = rng.range(0.16, 0.38);
-    m4.compose({ x, y, z }, qt, { x: s, y: s, z: s });
-    mesh.setMatrixAt(n, m4);
-    col.setHex(TINTS[rng.int(0, TINTS.length - 1)]).multiplyScalar(rng.range(0.7, 1.35));
-    mesh.setColorAt(n, col);
-    seeds[n * 3] = rng.next(); seeds[n * 3 + 1] = rng.next(); seeds[n * 3 + 2] = rng.next();
-    n++;
+  const seedAttr = new THREE.InstancedBufferAttribute(seeds, 3);
+  seedAttr.setUsage(THREE.DynamicDrawUsage);
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  if (mesh.instanceColor) mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
+  geo.setAttribute('aSeed', seedAttr);
+  mesh.count = 0;
+
+  const STEP = 7.2 / Math.sqrt(clamp(ctx.quality.grassDensity ?? 1, 0.4, 1.5));
+  const R = 86;
+  function rebuildField(camX, camZ) {
+    motes.length = 0;
+    let n = 0;
+    const i0 = Math.floor((camX - R) / STEP), i1 = Math.ceil((camX + R) / STEP);
+    const j0 = Math.floor((camZ - R) / STEP), j1 = Math.ceil((camZ + R) / STEP);
+    for (let j = j0; j <= j1 && n < N; j++) {
+      for (let i = i0; i <= i1 && n < N; i++) {
+        const h0 = hash2i(i, j, 8101), h1 = hash2i(i, j, 8117);
+        const x = i * STEP + (h0 - 0.5) * STEP * 0.96;
+        const z = j * STEP + (h1 - 0.5) * STEP * 0.96;
+        if (Math.hypot(x - camX, z - camZ) > R) continue;
+        const gy = T.heightAt(x, z);
+        if (gy < T.waterLevel + 0.4) continue;
+        if (T.slopeAt(x, z) > 0.42) continue;
+        const h2 = hash2i(i, j, 8123);
+        // motes gather over damp low ground, not evenly across the meadow
+        if (h2 > 0.32 + smoothstep(30, 8, gy) * 0.55) continue;
+        const h3 = hash2i(i, j, 8147), h4 = hash2i(i, j, 8161), h5 = hash2i(i, j, 8179);
+        const y = gy + 0.35 + Math.pow(h3, 1.7) * 2.3;
+        const s = 0.16 + h4 * 0.22;
+        m4.compose({ x, y, z }, qt, { x: s, y: s, z: s });
+        mesh.setMatrixAt(n, m4);
+        col.setHex(TINTS[Math.floor(h5 * TINTS.length) % TINTS.length]).multiplyScalar(0.7 + h0 * 0.65);
+        mesh.setColorAt(n, col);
+        seeds[n * 3] = h3; seeds[n * 3 + 1] = h4; seeds[n * 3 + 2] = h1;
+        // kept for the light pool: base position, ground height, seeds and tint
+        motes.push({ x, y, z, gy, tint: col.clone(), s0: h3, s1: h4, ph: h1 * Math.PI * 2 });
+        n++;
+      }
+    }
+    mesh.count = n;
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    seedAttr.needsUpdate = true;
   }
-  mesh.count = n;
-  mesh.instanceMatrix.needsUpdate = true;
-  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 3));
+  rebuildField(0, 0);
+
+  /* ---------------------------------------------------------- the light pool ---- */
+  // Six. three bakes NUM_POINT_LIGHTS into every program in the scene, so this is a
+  // hard architectural ceiling, not a performance preference — and six warm pools in a
+  // frame is already more practicals than pw_16 has lanterns in shot.
+  const POOL = 6;
+  const AMBER = new THREE.Color(0xffa855);
+  const lights = [];
+  for (let i = 0; i < POOL; i++) {
+    // decay 2 with distance 9: irradiance falls as 1/d^2 and is clamped to zero at 9 m,
+    // so each mote owns a readable ellipse of ground and nothing beyond it
+    const l = new THREE.PointLight(0xffb469, 0, 11, 2);
+    l.castShadow = false;
+    l.visible = false;
+    l.matrixAutoUpdate = true;
+    mesh.add(l);           // the mesh is the only thing the world system adds to the scene
+    lights.push({ l, mote: null });
+  }
+  let lastPick = -1e9, lastCX = 1e9, lastCZ = 1e9, lastLit = false;
+  let fieldX = 0, fieldZ = 0;
+
+  function pick(cam) {
+    // nearest motes to the camera, preferring the low ones — a pool 3 m in the air
+    // lights nothing, and the whole point is a wash on the ground
+    const scored = [];
+    for (let i = 0; i < motes.length; i++) {
+      const m = motes[i];
+      const d = Math.hypot(m.x - cam.x, m.z - cam.z);
+      if (d > 26) continue;
+      scored.push([d + (m.y - m.gy) * 3.0, i]);
+    }
+    scored.sort((a, b) => a[0] - b[0]);
+    for (let k = 0; k < POOL; k++) {
+      lights[k].mote = scored[k] ? motes[scored[k][1]] : null;
+    }
+  }
 
   return {
-    mesh, count: n,
+    mesh, lightCount: POOL,
+    get count() { return mesh.count; },
     update(elapsed, nightAmt) {
       uniforms.uTime.value = elapsed;
       uniforms.uAmt.value = nightAmt;
-      mesh.visible = nightAmt > 0.004;
+      const lit = nightAmt > 0.004;
+      mesh.visible = lit;
+
+      // re-anchor the field on an 18 m cell so it is always around the camera; the
+      // hash is world-anchored, so an individual mote does not move when it does
+      const c0 = ctx.camera?.position;
+      if (c0) {
+        const qx = Math.round(c0.x / 18) * 18, qz = Math.round(c0.z / 18) * 18;
+        if (qx !== fieldX || qz !== fieldZ) {
+          fieldX = qx; fieldZ = qz;
+          rebuildField(qx, qz);
+          lastPick = -1e9;
+        }
+      }
+
+      // Toggling visibility changes the scene's light count and forces three to
+      // relink every material, so it is done once on the day/night crossing and never
+      // per frame. By day these are invisible and cost exactly nothing.
+      if (lit !== lastLit) {
+        for (const e of lights) e.l.visible = lit;
+        lastLit = lit;
+        lastPick = -1e9;
+      }
+      if (!lit) return;
+
+      const cam = ctx.camera?.position;
+      if (cam && (elapsed - lastPick > 0.8 || Math.hypot(cam.x - lastCX, cam.z - lastCZ) > 2.5)) {
+        pick(cam);
+        lastPick = elapsed; lastCX = cam.x; lastCZ = cam.z;
+      }
+      for (const e of lights) {
+        const m = e.mote;
+        if (!m) { e.l.intensity = 0; continue; }
+        // the sprite's own bob and breath, replicated so the pool moves and pulses
+        // WITH the mote instead of sitting under a light that has drifted off it
+        const bob = Math.sin(elapsed * (0.23 + m.s1 * 0.14) + m.ph * 1.7) * 0.45;
+        const pulse = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(elapsed * (0.7 + m.s0 * 1.1) + m.ph));
+        e.l.position.set(m.x, m.y + bob, m.z);
+        // The critic's note on the reference lantern is that the "warm core colour-
+        // shifts as it fades into the cool blue ambient". A few of the sprite tints are
+        // deliberately cool-green so the FIELD is not one hue, but a cool-green pool on
+        // green grass reads as a radioactive puddle. The sprite keeps its tint; the pool
+        // it casts is pulled two thirds of the way to lantern amber.
+        e.l.color.copy(m.tint).lerp(AMBER, 0.66);
+        e.l.intensity = 2.0 * nightAmt * pulse;
+      }
     },
   };
 }

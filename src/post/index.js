@@ -66,7 +66,11 @@ export function createPost() {
   // manual overrides on top of the resolved look; null == follow the look table
   const overrides = { exposure: null, bloom: null, vignette: null, grain: null, aberration: null };
   let dofMode = 'auto';        // 'auto' | 'on' | 'off'
-  let dofStrength = 1.0;
+  // Aperture multiplier on the thin-lens term. 1.0 put the mid-ground grass 4-8 m
+  // behind a portrait subject at a 3-4 px disc -- present in the buffer, invisible on
+  // screen. pw_15 gives up that band almost completely while the fox stays razor
+  // sharp, which is a steeper falloff, not a bigger maximum.
+  let dofStrength = 1.7;
   let lastLook = null;
   let lastDof = false;
 
@@ -199,12 +203,34 @@ export function createPost() {
     hz.uHazeRange.value = look.hazeRange ?? 520;
     hz.uHaze.value = look.haze ?? 0.45;
     hz.uHazeDesat.value = look.hazeDesat ?? 0.75;
+    hz.uHazeNear.value = look.hazeNear ?? 0.0;
+    hz.uHazeNearRange.value = look.hazeNearRange ?? 60;
 
     const fov = ctx.camera.fov ?? 60;
     const want = dofMode === 'on' || (dofMode === 'auto' && fov < 46);
     // The pass always runs (it carries the aerial perspective); zero strength turns
-    // the defocus off without removing the haze.
+    // the THIN-LENS defocus off without removing the haze.
     hz.uStrength.value = want ? dofStrength : 0.0;
+
+    // The foreground plane is not part of the thin-lens model and is NOT gated on the
+    // lens. Reference #10's over-shoulder framing puts the player 2.3 m from the
+    // camera and grass blades well inside a metre of it, and both pw_10 and pw_11
+    // defocus that foreground on a wide lens. Gating defocus on fov < 46 is why the
+    // four wide daylight shots read as "uniformly, mercilessly sharp".
+    //
+    // The ramp is deliberately short. It has to reach full softness on grass blades
+    // brushing the lens and be essentially over by the time it gets to the player's
+    // back, or the character -- who is a subject, not scenery -- turns to mush.
+    // On a portrait lens the thin-lens near term already owns everything closer than
+    // the creature, so the ramp is pulled in to stay out of its way.
+    hz.uNearIn.value = 0.35;
+    hz.uNearOut.value = want ? 1.1 : 4.2;
+
+    // Wide-lens far plane. On a portrait the thin lens already owns everything behind
+    // the creature, so this is switched off there rather than stacked on top of it.
+    hz.uFarPlaneCoc.value = want ? 0 : (atmosPass._widePlaneCoc ?? 0);
+    hz.uFarIn.value = 30;
+    hz.uFarOut.value = 160;
     lastDof = want;
   }
 

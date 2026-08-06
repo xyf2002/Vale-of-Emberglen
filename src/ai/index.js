@@ -49,6 +49,29 @@ import { scanScene, lakeShore, PLACERS } from './props.js';
  * WHAT IT WRITES ON A CREATURE (unchanged contract, all additive):
  *   intent.move / look / anim / speed / gesture / gesturePhase / urgency / headTilt /
  *   crouch / phase;  mood;  emote;  aiState;  aiReason
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * BEING SHOT AT, AND BEING CAUGHT (added when src/weapons and src/spheres arrived)
+ *
+ * THERE IS NO DEATH IN THIS GAME AND NOTHING IN THIS FILE ADDS ANY. A round drains
+ * stamina (src/weapons/weaken.js owns that ledger and the visible flinch); what this
+ * file owns is the MIND. Three reactions, in escalating order:
+ *
+ *   HIT       `weapon:hit` — a rooted stagger of ~0.3 s (the ledger is rocking the body
+ *             during exactly that window) and then a flat-out run. Not a "notice", not
+ *             an "assess": a creature that has been shot does not stop to think.
+ *   EXHAUSTED `creature:exhausted` — at zero stamina it stops running because it CANNOT
+ *             run. It goes down on its haunches, flanks heaving, head low, and stays
+ *             there until the ledger regenerates it past the clear line. This is the
+ *             capture window, and it has to read as winded rather than as wounded.
+ *   SPOOKED   every hit, and every sphere it bursts out of, adds to `b.spooked` — a slow
+ *             (~90 s) decay that widens the flight distance and eats into the comfort
+ *             score. The creature you shot is warier of you for the rest of the session,
+ *             which is what makes the gun a real cost rather than a free "hold" button.
+ *
+ * The AI also stands entirely down while `cr._sphere.busy` is set: the sphere system is
+ * flying the creature into a shell during those beats and two systems writing the same
+ * intent would fight.
  */
 
 // ───────────────────────────────────────────────────────────── vocabulary
@@ -86,6 +109,9 @@ const STATE_INFO = {
   retreat:       { mood: 'wary',     emote: 'sweat' },
   flee:          { mood: 'afraid',   emote: 'sweat' },
   wary:          { mood: 'wary',     emote: null },
+  // Spent, not hurt. `calm` is the right mood word: a winded animal is not afraid of you
+  // any more, it simply has nothing left, which is exactly why it is easy to befriend.
+  winded:        { mood: 'calm',     emote: 'sweat' },
   treat:         { mood: 'eating',   emote: 'heart' },
   beg:           { mood: 'happy',    emote: 'heart' },
   follow_player: { mood: 'happy',    emote: null },
@@ -96,7 +122,7 @@ const INTERRUPTIBLE = new Set(['idle', 'travel', 'graze', 'browse', 'drink', 're
 /** activity states a creature can be sent back to after a contact */
 const RESUMABLE = new Set(['graze', 'browse', 'drink', 'rest', 'lookout', 'groom', 'travel', 'idle']);
 /** states that outrank a fresh player-notice */
-const CONTACT_LOCKED = new Set(['flee', 'treat', 'notice', 'play_bout']);
+const CONTACT_LOCKED = new Set(['flee', 'treat', 'notice', 'play_bout', 'winded']);
 
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 const TAU = Math.PI * 2;
@@ -138,6 +164,8 @@ const BEAT_PHRASE = {
   watch: 'standing sentry, head high', perchsit: 'sitting, head high',
   groom: 'sitting, grooming', scratch: 'sitting, scratching an ear',
   stand: 'standing', look: 'standing, head turned', doze: 'asleep, curled up',
+  heave: 'down on its haunches, flanks heaving', gasp: 'head low, getting its breath back',
+  brace: 'braced, feet planted, head snapped round',
 };
 
 export function createAI() {
@@ -152,7 +180,7 @@ export function createAI() {
     a: new THREE.Vector3(), b: new THREE.Vector3(), c: new THREE.Vector3(),
     d: new THREE.Vector3(), e: new THREE.Vector3(),
   };
-  const stats = { notices: 0, glances: 0, approaches: 0, flees: 0, settles: 0, playBouts: 0, meals: 0, drinks: 0, rests: 0, resumes: 0, propsPlaced: 0, propsFound: 0 };
+  const stats = { notices: 0, glances: 0, approaches: 0, flees: 0, settles: 0, playBouts: 0, meals: 0, drinks: 0, rests: 0, resumes: 0, propsPlaced: 0, propsFound: 0, shotsTaken: 0, breakouts: 0, winded: 0 };
 
   const api = {
     name: 'ai',
@@ -180,6 +208,17 @@ export function createAI() {
       c.bus.on('creature:fed', ({ creature, trustDelta }) => onFed(creature, trustDelta));
       c.bus.on('creature:tamed', ({ creature }) => onTamed(creature));
       c.bus.on('creature:spawned', (cr) => { if (cr && !cr._ai) { makeBrain(cr); joinHerd(cr); } });
+
+      // ---- the loud half of the game ------------------------------------
+      c.bus.on('weapon:hit', ({ creature, damage }) => onShot(creature, damage));
+      c.bus.on('creature:exhausted', ({ creature }) => onExhausted(creature));
+      c.bus.on('creature:recovered', ({ creature }) => onRecovered(creature));
+      c.bus.on('sphere:escaped', ({ creature, atShake }) => onBrokeOut(creature, atShake));
+      c.bus.on('sphere:hit', ({ creature }) => {
+        // it is being pulled into the shell; stop planning and let go of its spot
+        const b = creature?._ai;
+        if (b) { release(b); b.pending = null; b.glanceT = 0; }
+      });
     },
 
     update(dt, c) {
@@ -209,6 +248,18 @@ export function createAI() {
         b.contactCooldown = Math.max(0, b.contactCooldown - dt);
         b.glanceCool = Math.max(0, b.glanceCool - dt);
         b.glanceT = Math.max(0, b.glanceT - dt);
+        b.stagger = Math.max(0, b.stagger - dt);
+
+        // The sphere system is flying this creature into a shell. Two systems writing the
+        // same intent on the same frame is a fight neither wins, so stand down entirely
+        // and let the timers above keep running.
+        if (cr._sphere?.busy) {
+          b.vel.set(0, 0, 0);
+          b.lookTargetPoint = null;
+          b.gestureName = null;
+          if (cr.intent?.move) cr.intent.move.set(0, 0, 0);
+          continue;
+        }
 
         updateNeeds(cr, b, dt, night);
         perceive(cr, b, pp, pspeed, dt);
@@ -234,8 +285,10 @@ export function createAI() {
     snapshot() {
       const list = creatures.list;
       const byMood = {}, byState = {};
-      let aware = 0, fedOnce = 0, engaged = 0, moving = 0;
+      let aware = 0, fedOnce = 0, engaged = 0, moving = 0, spooked = 0, winded = 0;
       for (const cr of list) {
+        if ((cr._ai?.spooked ?? 0) > 0.05) spooked++;
+        if (cr._ai?.state === 'winded') winded++;
         byMood[cr.mood] = (byMood[cr.mood] || 0) + 1;
         const s = cr._ai?.state ?? 'unborn';
         byState[s] = (byState[s] || 0) + 1;
@@ -252,6 +305,9 @@ export function createAI() {
         aware, fedOnce,
         // how many creatures are actually at a prop this frame vs standing in open grass
         engagedWithProp: engaged, notEngaged: list.length - engaged, moving,
+        // the loud half: how many are carrying a memory of being shot at, and how many
+        // are on their haunches right now. Neither is a death count; there is no death.
+        spooked, winded,
         herds: herds.map((h) => ({ species: h.species, n: h.members.length, at: h.site?.label ?? '—', doing: h.order })),
         props: props.map((p) => ({
           id: p.id, kind: p.kind, src: p.source,
@@ -546,7 +602,11 @@ export function createAI() {
       contactPhase: 'none', contactCooldown: rng.range(0, 6),
       glanceT: 0, glanceCool: rng.range(0, 5), startle: 0,
 
-      mem: { fed: 0, scares: 0, familiarity: 0, lastFedAt: -999, contacts: 0, closest: 999 },
+      // ---- being shot at / caught -------------------------------------------
+      stagger: 0,        // seconds of rooted flinch; the weaken ledger rocks the body
+      spooked: 0,        // 0..1, decays over ~90 s. Widens flight distance permanently-ish.
+
+      mem: { fed: 0, scares: 0, familiarity: 0, lastFedAt: -999, contacts: 0, closest: 999, shots: 0, breakouts: 0 },
 
       vel: new THREE.Vector3(),
       lookPoint: new THREE.Vector3(),
@@ -690,7 +750,14 @@ export function createAI() {
     if (st === 'settle' || st === 'follow_player') n.social = clamp01(n.social - dt * 0.06);
     if (st === 'flee') n.fatigue = clamp01(n.fatigue + dt * 0.02);
 
+    if (st === 'winded') { n.fatigue = clamp01(n.fatigue - dt * 0.02); }
+
     b.mem.familiarity = clamp01(b.mem.familiarity - dt * 0.0008);
+    // A creature you shot stays warier of you for about a minute and a half. It fades,
+    // because a permanent grudge would make one stray round ruin a species for the rest
+    // of the session — but it fades slowly enough that "shoot it then befriend it" costs
+    // real patience rather than four seconds.
+    if (b.spooked > 0) b.spooked = Math.max(0, b.spooked - dt / 90);
   }
 
   // ═══════════════════════════════════════════════════════════ perception
@@ -774,8 +841,24 @@ export function createAI() {
       return;
     }
 
+    // --- 1b. spent: it stays down until the weaken ledger gives it its legs back ---
+    if (b.state === 'winded') {
+      // `cr.exhausted` is mirrored onto the creature by src/weapons/weaken.js and lifts
+      // on its own once stamina regenerates past the clear line; `creature:recovered`
+      // normally does this, but the state is also entered directly by onShot() on an
+      // already-spent animal, so the flag is the authority rather than the event.
+      if (!cr.exhausted && b.stateT > 1.2) {
+        setState(cr, b, 'wary', 'got its breath back, and is keeping its eye on you');
+        b.stateDur = 3 + b.p.shy * 3;
+      }
+      return;
+    }
+
     // --- 2. panic overrides everything ------------------------------------------
-    const panicDist = 1.4 + b.p.shy * 2.2 - b.mem.familiarity * 1.6 - cr.trust * 1.6;
+    // A creature that has been shot at or has burst out of a sphere keeps a wider
+    // circle around you than one that has only ever been walked past.
+    const panicDist = 1.4 + b.p.shy * 2.2 + b.spooked * 3.2
+      - b.mem.familiarity * 1.6 - cr.trust * 1.6;
     if (b.state !== 'flee' && b.state !== 'treat' && (dist < panicDist || b.startle > 0.55) && b.awareness > 0.3) {
       b.mem.scares++;
       b.mem.familiarity = clamp01(b.mem.familiarity - 0.12);
@@ -933,6 +1016,9 @@ export function createAI() {
       0.12 + b.p.bold * 0.30 + b.p.curious * 0.22 + (cr.trust ?? 0) * 0.34
       + b.mem.familiarity * 0.28 + foodPull
       - b.p.shy * 0.34 - Math.min(0.30, b.mem.scares * 0.11)
+      // being shot at is not the same kind of memory as being crowded, so it gets its
+      // own term rather than being folded into the scare count
+      - b.spooked * 0.55
       - Math.max(0, (7 - dist)) * 0.028,
     );
   }
@@ -1080,6 +1166,8 @@ export function createAI() {
       case 'groom':  return [{ n: 'groom', d: R(1.8, 3.0) }, { n: 'scratch', d: R(1.4, 2.4) }];
       case 'sleep':  return [{ n: 'doze', d: R(8, 14) }];
       case 'idle':   return [{ n: 'stand', d: R(1.8, 3.0) }, { n: 'look', d: R(1.4, 2.4) }, { n: 'stand', d: R(1.2, 2.2) }];
+      // the breathing loop: long heaves, a shorter head-down gasp between them
+      case 'winded': return [{ n: 'heave', d: R(2.2, 3.4) }, { n: 'gasp', d: R(1.4, 2.2) }, { n: 'heave', d: R(1.8, 3.0) }];
       default: return null;
     }
   }
@@ -1125,6 +1213,7 @@ export function createAI() {
       case 'retreat': return 2.4 + b.p.shy * 1.6;
       case 'flee': return 2.2 + b.p.shy * 2.2;
       case 'wary': return 2.5 + b.p.shy * 2;
+      case 'winded': return 1e9;     // held by the weaken ledger, not by a timer
       case 'treat': return 2.6;
       case 'beg': return 3.5;
       case 'graze': return b.rng.range(11, 20);
@@ -1165,8 +1254,107 @@ export function createAI() {
   function onTamed(cr) {
     const b = cr._ai ?? makeBrain(cr);
     b.mem.familiarity = 1;
+    b.spooked = 0;                 // whatever happened before, it is over
     setState(cr, b, 'settle', 'it has decided you are safe — it is yours now');
     b.stateDur = 5;
+  }
+
+  // ══════════════════════════════════════════════ being shot at, and caught
+
+  /**
+   * A round landed. There is no health here and nothing below can remove a creature —
+   * `damage` is stamina, the ledger in src/weapons owns it, and the only thing this
+   * function decides is what the animal now THINKS.
+   *
+   * Order matters: a rooted stagger FIRST, then the run. The weaken ledger applies a
+   * duck-and-roll to the pose over roughly the same window, so a creature that sprinted
+   * off on the same frame would be flinching while already at full speed — which reads
+   * as a hit that did not connect. Rooting it for ~0.3 s is what makes the round land.
+   */
+  function onShot(cr, damage = 0) {
+    if (!cr) return;
+    const b = cr._ai ?? makeBrain(cr);
+    b.mem.shots++;
+    b.mem.scares++;
+    stats.shotsTaken++;
+    b.mem.familiarity = clamp01(b.mem.familiarity - 0.30);
+    b.spooked = clamp01(b.spooked + 0.45);
+    b.awareness = 1;
+    b.startle = 1;
+    b.pending = null;
+    b.contactPhase = 'none';
+    b.contactCooldown = b.rng.range(14, 26);
+    b.needs.fatigue = clamp01(b.needs.fatigue + 0.10);
+
+    // already spent: it has nothing left to run with, so it just rocks where it stands
+    if (cr.exhausted || b.state === 'winded') {
+      b.stagger = Math.max(b.stagger, 0.26);
+      if (b.state !== 'winded') enterWinded(cr, b, 'it has nothing left to run with');
+      else { b.stateT = 0; b.reason = 'another round landed on an animal already spent'; }
+      return;
+    }
+
+    stats.flees++;
+    b.stagger = 0.30 + b.rng.range(0, 0.10);
+    release(b);
+    setState(cr, b, 'flee', `you shot it (${b.mem.shots}x) — it is running`);
+    b.stateDur = 3.4 + b.p.shy * 2.4;
+    ctx.bus.emit('creature:startled', { creature: cr, dist: b.lastPlayerDist, cause: 'shot' });
+  }
+
+  /**
+   * Zero stamina. It stops because it CANNOT run, not because it has forgiven you — and
+   * that difference has to be visible, so it goes down on its haunches with its head low
+   * and its flanks working rather than sitting up prettily the way `settle` does.
+   */
+  function enterWinded(cr, b, why) {
+    if (b.state !== 'winded') stats.winded++;
+    release(b);
+    setState(cr, b, 'winded', why);
+    b.stateDur = 1e9;      // held until the ledger says it has its breath back
+  }
+
+  function onExhausted(cr) {
+    if (!cr) return;
+    const b = cr._ai ?? makeBrain(cr);
+    b.spooked = clamp01(b.spooked + 0.2);
+    b.stagger = Math.max(b.stagger, 0.35);
+    enterWinded(cr, b, 'it has run itself to a standstill and cannot go any further');
+  }
+
+  function onRecovered(cr) {
+    const b = cr?._ai;
+    if (!b || b.state !== 'winded') return;
+    // back on its feet — and it has NOT forgotten. Straight to wary, not to grazing.
+    setState(cr, b, 'wary', 'back on its feet, watching the thing that did that to it');
+    b.stateDur = 3 + b.p.shy * 3;
+  }
+
+  /**
+   * It burst out of a sphere. Same shape as a shot — a beat of shock, then distance —
+   * but no stamina was taken, so this is purely a change of mind.
+   */
+  function onBrokeOut(cr, atShake = 0) {
+    if (!cr) return;
+    const b = cr._ai ?? makeBrain(cr);
+    b.mem.breakouts++;
+    b.mem.scares++;
+    stats.breakouts++;
+    b.mem.familiarity = clamp01(b.mem.familiarity - 0.22);
+    b.spooked = clamp01(b.spooked + 0.35);
+    b.awareness = 1;
+    b.startle = 1;
+    b.pending = null;
+    b.contactCooldown = b.rng.range(10, 20);
+    if (cr.exhausted || b.state === 'winded') {
+      b.stagger = Math.max(b.stagger, 0.3);
+      return;                       // too tired to bolt; it stays where it landed
+    }
+    stats.flees++;
+    b.stagger = 0.22;
+    release(b);
+    setState(cr, b, 'flee', `it burst out of a sphere on wobble ${atShake || '?'} and wants nothing to do with you`);
+    b.stateDur = 2.8 + b.p.shy * 2.2;
   }
 
   // ═══════════════════════════════════════════════════════════════ acting
@@ -1186,6 +1374,17 @@ export function createAI() {
 
     if (s === 'courted') {
       b.vel.set(0, 0, 0); b.lookTargetPoint = null; b.gestureName = null;
+      return;
+    }
+
+    // A round has just landed and the weaken ledger is rocking the body through its own
+    // flinch. Anything that moves during that window makes the hit read as a miss, so the
+    // feet are planted and only the head answers — snapped round to whatever did it.
+    if (b.stagger > 0 && s !== 'winded') {
+      halt(b, dt, 18);
+      b.lookTargetPoint = pp;
+      b.gestureName = 'perk';
+      b.pose = 'stand';
       return;
     }
 
@@ -1361,6 +1560,23 @@ export function createAI() {
         break;
       }
       case 'wary': halt(b, dt, 8); look = pp; gesture = (b.stateT % 3) < 2 ? 'perk' : 'ear_flick'; break;
+      case 'winded': {
+        // Down, and staying down. Head low most of the time, lifted just enough to check
+        // where you are — that lift is the only thing that separates this from `rest`,
+        // and it is what tells the player the animal is spent rather than asleep.
+        halt(b, dt, 12);
+        b.pose = 'sit';
+        const n = beat?.n ?? 'heave';
+        // Head DOWN, not null: output() falls back to b.lookPoint when there is no look
+        // target, and that starts life at the world origin — a winded creature would
+        // have slowly swung round to face 0,0 while it caught its breath.
+        look = n === 'gasp'
+          ? scratch.b.set(cr.position.x - Math.sin(cr.yaw) * 1.4, cr.position.y,
+            cr.position.z - Math.cos(cr.yaw) * 1.4)
+          : pp;
+        gesture = n === 'gasp' ? 'lie_down' : 'chew';   // flanks working, head down
+        break;
+      }
       case 'treat': halt(b, dt, 10); look = pp; gesture = 'chew'; b.pose = 'eat'; break;
       case 'beg': halt(b, dt, 8); look = pp; gesture = (b.stateT % 1.2) < 0.6 ? 'beg' : 'hop'; break;
       case 'follow_player': {
@@ -1610,6 +1826,8 @@ export function createAI() {
   }
 
   function doingPhrase(cr, b) {
+    if (cr._sphere?.busy) return 'inside a bond sphere — the AI has stood down for it';
+    if (b.stagger > 0) return `rocked by a hit, feet planted (${b.stagger.toFixed(2)}s of flinch left)`;
     if (b.state === 'courted') {
       const act = b.owned ?? cr._tame?.act ?? 'watch';
       return `${COURTED_PHRASE[act] ?? `mid-taming (${act})`}; ${motionClause(cr, b)}`;
@@ -1641,6 +1859,7 @@ export function createAI() {
       case 'retreat': return `backing away, glancing over its shoulder; ${m}`;
       case 'flee': return `running flat out away from you; ${m}`;
       case 'wary': return `stopped at ${b.lastPlayerDist.toFixed(1)}m, watching you; ${m}`;
+      case 'winded': return `${beatWord ?? 'down and blown'} — spent, stamina ${(cr.stamina01 ?? 0).toFixed(2)}, not going anywhere; ${m}`;
       case 'treat': return `eating the berry you gave it; ${m}`;
       case 'beg': return `hopping in front of you, begging for another berry; ${m}`;
       case 'follow_player': return `following you; ${m}`;
@@ -1661,6 +1880,12 @@ export function createAI() {
   function playerPhrase(cr, b, d) {
     const dd = d.toFixed(0);
     if (cr.tamed) return `Tamed; trust ${cr.trust.toFixed(2)}, fed ${b.mem.fed}x.`;
+    if (b.state === 'winded') {
+      return `You are ${dd}m away. Shot ${b.mem.shots}x, stamina ${(cr.stamina01 ?? 0).toFixed(2)} — winded, not hurt, and much easier to befriend right now.`;
+    }
+    if (b.mem.shots > 0 || b.mem.breakouts > 0) {
+      return `You are ${dd}m away; shot ${b.mem.shots}x, burst out of ${b.mem.breakouts} sphere(s), wariness ${b.spooked.toFixed(2)}.`;
+    }
     if (b.state === 'flee' || b.state === 'retreat') return `You are ${dd}m away; spooked ${b.mem.scares}x total.`;
     if (d > b.sight) return `You are ${dd}m away — outside its ${b.sight.toFixed(0)}m range, so it has not reacted and will not.`;
     if (b.awareness > 0.5) return `Aware of you at ${dd}m (commits inside ${b.commit.toFixed(1)}m; trust ${cr.trust.toFixed(2)}, fed ${b.mem.fed}x).`;

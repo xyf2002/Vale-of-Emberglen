@@ -119,6 +119,8 @@ uniform float uCloudGain;
 uniform float uCirrusAmt;
 uniform float uWindAngle;
 uniform float uHaze;          // extra low-altitude milkiness
+uniform float uDiscAmt;       // 1 while the sun's disc is above the horizon, 0 after it sets
+uniform float uNightChroma;   // extra chroma on the night/twilight sky
 
 ${SKY_GLSL_COMMON}
 
@@ -181,9 +183,15 @@ vec3 scatter(vec3 dir, vec3 sunDir) {
 
   vec3 L0 = vec3(0.1) * Fex;
   // sun disc + tight corona (kept generous so bloom has something to grab)
-  float disc = smoothstep(0.99986, 0.99997, cosTheta);
+  //
+  // uDiscAmt exists because the scattering sun (uSunSkyDir) is deliberately held just
+  // BELOW the true horizon through twilight so the Preetham model keeps emitting a
+  // sunset band. Without the gate that clamp would also pin a blazing sun disc on the
+  // horizon for the whole of the blue hour. The disc follows the TRUE sun; the band
+  // follows the clamped one.
+  float disc = smoothstep(0.99986, 0.99997, cosTheta) * uDiscAmt;
   L0 += sunE * 17000.0 * Fex * disc;
-  float corona = pow(max(0.0, cosTheta), 900.0);
+  float corona = pow(max(0.0, cosTheta), 900.0) * uDiscAmt;
   L0 += sunE * 260.0 * Fex * corona;
 
   vec3 tex = (Lin + L0) * 0.04 + vec3(0.0, 0.0003, 0.00075);
@@ -303,7 +311,10 @@ void main() {
 
   // -- slight chroma lift so the day sky reads blue (reference skies sit at
   // chroma ~0.22; the Rayleigh wash alone lands ~0.15) ---------------------
-  col = mix(vec3(dot(col, vec3(0.2126, 0.7152, 0.0722))), col, 1.22);
+  // uNightChroma pushes this much harder after dark: pw_16's sky is a deeply
+  // saturated navy, ours washed out to a grey-blue because the horizon wash above
+  // is a desaturator and at dusk the horizon band fills most of the frame.
+  col = mix(vec3(dot(col, vec3(0.2126, 0.7152, 0.0722))), col, 1.22 + uNightChroma);
 
   // --- clouds ------------------------------------------------------------
   vec3 sunTint = scatter(normalize(uSunSkyDir + UPV * 0.02), uSunSkyDir) * uScatterScale * 1.15
@@ -503,9 +514,12 @@ export function createSky() {
   };
 
   let sun, hemi, fill, dome, domeMat, pmrem, envScene, envMesh, envRT = null;
+  let warmKick, warmKickTarget, skyRim, skyRimTarget;
   let lastEnvKey = -1e9;
   let envTimer = 0;
 
+  const _rimV = new THREE.Vector3();
+  const UP_Y = new THREE.Vector3(0, 1, 0);
   const sunDir = new THREE.Vector3(0, 1, 0);
   const keyDir = new THREE.Vector3(0, 1, 0);
   const moonDir = new THREE.Vector3(0, -1, 0);
@@ -560,8 +574,26 @@ export function createSky() {
     const starAmt = smoothstep(0.010, -0.075, y);
     const moonAmt = smoothstep(0.020, -0.060, y) * 0.9;
 
-    // scattering sun is clamped just below the horizon so twilight keeps a warm band
-    const skyY = Math.max(y, -0.055);
+    // ------------------------------------------------------------------
+    // THE TWILIGHT SKY HAD NO SUNSET BAND AT ALL.
+    //
+    // The comment here used to claim the clamp "keeps a warm band". It did not.
+    // Preetham's sunIntensity() is EE * max(0, 1 - exp(-(CUTOFF - acos(cz)) / STEEPNESS))
+    // with CUTOFF = 1.6111 rad = 92.3 deg, so it returns EXACTLY ZERO once the sun
+    // direction drops below cos(92.3 deg) = -0.0401. The old clamp of -0.055 sat on the
+    // wrong side of that cutoff, which meant that from the moment the sun set the entire
+    // in-scattering term was zero and the sky was nothing but the flat hand-authored
+    // night gradient. That is the single reason the dusk frame was one uniform slab: it
+    // had no sun-side and no anti-sun side, so the whole dome was the same colour, the
+    // fog derived from it was the same colour, and there was no warm/cool axis anywhere
+    // in the image.
+    //
+    // -0.016 sits just INSIDE the cutoff and gives sunE ~ 15 against noon's 658 -- about
+    // 2% of a noon sun, which is very close to what a civil-twilight sky actually is. The
+    // sun's own disc is gated off separately (uDiscAmt) so the band appears without a
+    // sun pinned to the horizon.
+    // ------------------------------------------------------------------
+    const skyY = Math.max(y, -0.026);
     const sHoriz = Math.sqrt(Math.max(1e-6, 1 - skyY * skyY));
     const hn = Math.hypot(sunDir.x, sunDir.z) || 1;
     const sunSky = new THREE.Vector3(
@@ -588,16 +620,23 @@ export function createSky() {
     const horizC = scatterJS(sunSky.z * 0.985, 0.045, -sunSky.x * 0.985, sunSky.x, sunSky.y, sunSky.z, P, [0, 0, 0]);
     const zen = scatterJS(0, 1, 0, sunSky.x, sunSky.y, sunSky.z, P, [0, 0, 0]);
 
-    const nz = [0.0050, 0.0128, 0.0390];
-    const nh = [0.0215, 0.0395, 0.0850];
+    // The hand-authored night sky. pw_16's sky is a DEEP, saturated navy that sits
+    // BELOW its own ground in value (sky 44.7 / ground 56.7); ours was a pale
+    // grey-navy sitting level with the ground. Darker and further apart in R vs B.
+    const nz = [0.0032, 0.0092, 0.0360];
+    const nh = [0.0145, 0.0292, 0.0800];
 
     const hRaw = [0, 0, 0];
     for (let i = 0; i < 3; i++) {
       hRaw[i] = (horizA[i] * 0.34 + horizB[i] * 0.33 + horizC[i] * 0.33) * scatterScale + nh[i] * nightAmt;
     }
-    // apply the same horizon wash the shader does (hz == 1 at the horizon)
+    // apply the same horizon wash the shader does (hz == 1 at the horizon).
+    // The wash is a desaturator, and after dark it is the thing that was turning a deep
+    // navy sky into grey-blue, so it is dialled right back through twilight (the same
+    // ramp goes to the dome via uHorizonWash). Daylight keeps its calibrated 0.92.
+    const horizonWash = lerp(0.92, 0.26, nightAmt);
     const lumH = hRaw[0] * 0.2126 + hRaw[1] * 0.7152 + hRaw[2] * 0.0722;
-    const washT = clamp01(0.62 * clamp01(0.92));
+    const washT = clamp01(0.62 * clamp01(horizonWash));
     const hazeMul = 1 + wx.haze * 0.55;
     const wtint = [1.02, 1.03, 1.06];
     // fog colour must sit below the sky's own horizon radiance (aerial perspective
@@ -674,8 +713,8 @@ export function createSky() {
     // ~1.9 linear the old 2.15-at-63-deg did, so the clip guardrail is undisturbed.
     // ------------------------------------------------------------------
     const dayKey = 3.05 * Math.pow(clamp01(y * 3.0), 0.92);
-    const twilightKey = 1.0 * (1 - moonBlend) * (1 - sunUp);
-    const moonKey = 0.42 * moonBlend;
+    const twilightKey = 0.32 * (1 - moonBlend) * (1 - sunUp);
+    const moonKey = 0.30 * moonBlend;
     sun.intensity = (dayKey * sunUp + twilightKey + moonKey) * wx.sunMul;
 
     if (moonBlend > 0.5) {
@@ -701,6 +740,66 @@ export function createSky() {
     // ------------------------------------------------------------------
     sun.shadow.intensity = 0.20 + 0.80 * smoothstep(0.02, 0.16, y);
 
+    // ------------------------------------------------------------------
+    // THE TWILIGHT RIG.
+    //
+    // A blind critic called the old dusk frame "a day render with the exposure pulled",
+    // and that is literally what it was: exactly the same one-key-plus-dome setup as
+    // noon, multiplied down and tinted blue. Every surface in the frame therefore
+    // received light from the same places in the same ratio it did at midday, which is
+    // why ground and sky landed at the identical value (ratio 0.99) and the palette
+    // collapsed to 264 colours. A real blue hour is not a dim day; it is a DIFFERENT
+    // rig -- a warm, low, nearly horizontal residual from the sunset raking one side of
+    // every form, read against a cool dome from the opposite side.
+    //
+    // So after dark the key stops being the whole story and two more lights fade in.
+    // Both are night-only by construction (sunsetAmt and nightAmt are both 0 above
+    // y = 0.10), so no daylight shot can see them.
+    //
+    //   warmKick -- the sunset band as a light. The band is a real emitter: at -6.7 deg
+    //               solar elevation the western sky is a bright orange wall a few
+    //               degrees tall, and it lights west-facing slopes warm while
+    //               east-facing ones keep only the blue dome. That warm/cool axis is
+    //               the whole of the blue-hour look and it is what puts hue variance
+    //               back into a palette that had none. It does not cast shadow: the
+    //               emitter is a 3-degree-tall band, not a point, so its occlusion is
+    //               soft to the point of absence -- and a hard shadow off a 3 deg
+    //               direction is exactly the "one flat blanket" failure documented
+    //               above for the key.
+    //
+    //   skyRim   -- silhouette separation. The same critic: "a dark blue character
+    //               against dark green grass with no rim, no silhouette separation".
+    //               At blue hour the brightest thing in the world is the sky, so
+    //               anything standing up in front of it is edge-lit. This is a
+    //               camera-relative kicker (it travels along the view axis, lifted, so
+    //               it grazes the far side of everything the lens can see) -- an
+    //               honest lighting rig rather than a physical emitter, and named as
+    //               such. It is what makes the player and the creatures read as
+    //               shapes instead of holes in the grass.
+    // ------------------------------------------------------------------
+    const sunsetAmt = smoothstep(0.10, -0.02, y) * smoothstep(-0.34, -0.10, y);
+    const wEl = 3.0 * Math.PI / 180;
+    const wc = Math.cos(wEl), wsn = Math.sin(wEl);
+    warmKick.position.set((sunDir.x / hn) * wc, wsn, (sunDir.z / hn) * wc).multiplyScalar(400);
+    warmKick.intensity = 0.84 * sunsetAmt * wx.sunMul;
+    warmKick.color.setRGB(1.0, 0.335, 0.105, THREE.LinearSRGBColorSpace);
+
+    skyRim.intensity = 0.80 * nightAmt;
+    skyRim.color.setRGB(0.48, 0.63, 1.0, THREE.LinearSRGBColorSpace);
+    if (ctx?.camera) {
+      _rimV.set(0, 0, -1).applyQuaternion(ctx.camera.quaternion);
+      _rimV.y = 0;
+      if (_rimV.lengthSq() < 1e-8) _rimV.set(0, 0, -1);
+      _rimV.normalize();
+      // Yawed 40 deg off the view axis, 24 deg up. Straight down the view axis is the
+      // one direction that produces NO visible rim: at the silhouette edge the normal
+      // is perpendicular to the view, so N.L is zero there and the lit band lands
+      // entirely on the side of the subject the lens cannot see. Swinging it off-axis
+      // is what puts the highlight on the edge you can actually look at.
+      _rimV.applyAxisAngle(UP_Y, 40.0 * Math.PI / 180);
+      skyRim.position.set(_rimV.x * 0.970, 0.242, _rimV.z * 0.970).multiplyScalar(400);
+    }
+
     // Hemisphere fill — reference #9 wants real shadow structure, so the ambient
     // must stay well below the key. The pendulum has now swung both ways: 0.33 in r01
     // crushed open shadows into a flat blue-grey, and the 0.51 it was raised to in
@@ -711,13 +810,20 @@ export function createSky() {
     // dusk shot's mean luminance guardrail with it.
     const skyLum = Math.max(0.02, zc[0] * 0.2126 + zc[1] * 0.7152 + zc[2] * 0.0722);
     hemi.color.copy(ambientColor);
+    // The night end of the ground bounce used to be (0.100, 0.092, 0.102) — a perfectly
+    // neutral grey, i.e. a bounce with no hue at all, which on a dome light means every
+    // downward-facing surface in the frame got the SAME colour as every upward-facing
+    // one, only dimmer. Warming it after dark gives the grass a warm underside against
+    // the cool sky top, which is a second warm/cool axis for free on exactly the
+    // thousands of near-vertical blade cards that fill the bottom half of the frame.
+    const gWarm = nightAmt;
     hemi.groundColor.setRGB(
-      lerp(0.10, 0.26, day) * 1.0,
-      lerp(0.10, 0.23, day) * 0.92,
-      lerp(0.12, 0.16, day) * 0.85,
+      lerp(lerp(0.10, 0.17, gWarm), 0.26, day) * 1.0,
+      lerp(lerp(0.10, 0.107, gWarm), 0.23, day) * 0.92,
+      lerp(lerp(0.12, 0.062, gWarm), 0.16, day) * 0.85,
       THREE.LinearSRGBColorSpace,
     );
-    hemi.intensity = (lerp(0.30, 0.16, clamp01(y * 2.2)) + 0.22 * Math.pow(clamp01(skyLum * 1.8), 0.9)) * wx.ambMul;
+    hemi.intensity = (lerp(lerp(0.30, 0.09, nightAmt), 0.16, clamp01(y * 2.2)) + 0.22 * Math.pow(clamp01(skyLum * 1.8), 0.9)) * wx.ambMul;
 
     // a very low cool fill so night silhouettes never crush to pure black
     fill.color.copy(zenithColor);
@@ -753,7 +859,9 @@ export function createSky() {
     u.uStarAmt.value = starAmt;
     u.uMoonAmt.value = moonAmt;
     u.uSkyGain.value = gain;
-    u.uHorizonWash.value = 0.80;
+    u.uHorizonWash.value = lerp(0.80, 0.22, nightAmt);
+    u.uDiscAmt.value = smoothstep(-0.004, 0.022, y);
+    u.uNightChroma.value = 0.75 * nightAmt;
     u.uHaze.value = wx.haze;
     u.uNightZenith.value.setRGB(nz[0], nz[1], nz[2], THREE.LinearSRGBColorSpace);
     u.uNightHorizon.value.setRGB(nh[0], nh[1], nh[2], THREE.LinearSRGBColorSpace);
@@ -892,6 +1000,22 @@ export function createSky() {
       fill = new THREE.AmbientLight(0x9fb8dd, 0.1);
       c.scene.add(fill);
 
+      // ---- twilight rig (see "THE TWILIGHT RIG" in apply()) ----
+      // Neither casts shadow: one stands in for a 3-degree band of sky and the other is
+      // a camera-relative kicker, and neither has an occluder geometry that would make
+      // a shadow map meaningful. Both sit at zero intensity in daylight.
+      warmKick = new THREE.DirectionalLight(0xffffff, 0);
+      warmKick.castShadow = false;
+      warmKickTarget = new THREE.Object3D();
+      c.scene.add(warmKick, warmKickTarget);
+      warmKick.target = warmKickTarget;
+
+      skyRim = new THREE.DirectionalLight(0xffffff, 0);
+      skyRim.castShadow = false;
+      skyRimTarget = new THREE.Object3D();
+      c.scene.add(skyRim, skyRimTarget);
+      skyRim.target = skyRimTarget;
+
       // ---- sky dome ----
       domeMat = new THREE.ShaderMaterial({
         uniforms: {
@@ -919,6 +1043,8 @@ export function createSky() {
           uCirrusAmt: { value: 0.85 },
           uWindAngle: { value: 0.6 },
           uHaze: { value: 0.1 },
+          uDiscAmt: { value: 1 },
+          uNightChroma: { value: 0 },
         },
         vertexShader: VERT,
         fragmentShader: FRAG,

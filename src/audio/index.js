@@ -96,6 +96,8 @@ export function createAudio() {
   // precedes creature:fed, which precedes taming:stage). These cools keep a single gesture
   // from stacking three copies of the same sting, and space out repeats of noisy events.
   let trustCool = 0, playCool = 0, suspendRetry = 0;
+  // a held trigger must not turn one animal into a chorus of itself
+  let hitVoiceCool = 0;
   let lastGatherAt = -100;            // ctx.elapsed when gather:complete last sang
 
   // --- footsteps -----------------------------------------------------------
@@ -166,6 +168,22 @@ export function createAudio() {
       on('gather:start', (p) => onGatherStart(p));
       on('gather:complete', (p) => onGatherComplete(p));
 
+      // --- bond spheres (src/spheres) --------------------------------------
+      on('sphere:thrown', (p) => onSphereThrown(p));
+      on('sphere:hit', (p) => onSphereHit(p));
+      on('sphere:shake', (p) => onSphereShake(p));
+      on('sphere:caught', (p) => onSphereCaught(p));
+      on('sphere:escaped', (p) => onSphereEscaped(p));
+
+      // --- weapons (src/weapons) -------------------------------------------
+      on('weapon:fired', (p) => onWeaponFired(p));
+      on('weapon:impact', (p) => onWeaponImpact(p));
+      on('weapon:hit', (p) => onWeaponHit(p));
+      on('weapon:dry', (p) => onWeaponDry(p));
+      on('weapon:reload', (p) => onWeaponReload(p));
+      on('weapon:aim', (p) => onWeaponAim(p));
+      on('creature:exhausted', (p) => onExhausted(p));
+
       // --- the field kit ---------------------------------------------------
       on('ui:journal', (p) => onJournal(p));
       on('journal:record', (p) => onDiscover(p));
@@ -224,6 +242,7 @@ export function createAudio() {
         gustCool = Math.max(0, gustCool - dt);
         lapCool = Math.max(0, lapCool - dt);
         trustCool = Math.max(0, trustCool - dt);
+        hitVoiceCool = Math.max(0, hitVoiceCool - dt);
         playCool = Math.max(0, playCool - dt);
 
         // some browsers drop a running context into 'suspended' without a tab switch
@@ -853,6 +872,143 @@ export function createAudio() {
     const sp = pos ? spatialOf(pos, 6) : { pan: 0, gain: 1 };
     api.play('gather', { gain: clamp(sp.gain + 0.15, 0.4, 1), pan: sp.pan * 0.6, kind: p?.kind });
     emit('audio:sting', { name: 'gather', kind: p?.kind, item: p?.item });
+  }
+
+  // =======================================================================
+  // BOND SPHERES
+  //
+  // Five beats, five cues, and one editorial decision that runs through all of them:
+  // the meadow REACTS. A sphere hitting a creature hushes the birds for as long as a
+  // gunshot would; the loop is loud and the world is meant to notice.
+  // =======================================================================
+
+  function onSphereThrown(p) {
+    const from = p?.from ?? playerPos();
+    const sp = spatialOf(from, 10);
+    api.play('sphere_throw', { gain: clamp(sp.gain + 0.35, 0.5, 1), pan: sp.pan * 0.5 });
+    birdHush = Math.max(birdHush, 1.4);
+    emit('audio:sting', { name: 'sphere_throw', chance: p?.chance ?? null });
+  }
+
+  function onSphereHit(p) {
+    const cr = p?.creature;
+    const sp = cr?.position ? spatialOf(cr.position, 9) : { pan: 0, gain: 1, distance: 6 };
+    api.play('sphere_hit', { gain: clamp(sp.gain + 0.2, 0.35, 1.05), pan: sp.pan });
+    // it gets one startled cry in before the shell shuts on it
+    if (cr) voiceCreature(cr, 'yip', true);
+    birdHush = Math.max(birdHush, 3.2);
+    emit('audio:sting', { name: 'sphere_hit', species: cr?.species ?? null });
+  }
+
+  /**
+   * The wobble. The RISING part is not a mix trick — `shake` and `of` go straight into
+   * the cue, which shortens, brightens and hardens each rock and stacks one more beat of
+   * a held tension tone (see Cues.js). Here the only job is to make each one a little
+   * louder than the last, so a third wobble is audibly the last chance.
+   */
+  function onSphereShake(p) {
+    const cr = p?.creature;
+    const n = Math.max(1, p?.shake ?? 1);
+    const sp = cr?.position ? spatialOf(cr.position, 8) : { pan: 0, gain: 1 };
+    api.play('sphere_shake', {
+      shake: n, of: p?.of ?? 3,
+      gain: clamp(sp.gain * (0.8 + n * 0.14) + 0.15, 0.3, 1.05), pan: sp.pan,
+    });
+    birdHush = Math.max(birdHush, 1.6);
+  }
+
+  function onSphereCaught(p) {
+    const cr = p?.creature;
+    const sp = cr?.position ? spatialOf(cr.position, 8) : { pan: 0, gain: 1 };
+    // Just the latch and a glow. `creature:tamed` lands immediately behind this and
+    // onTamed() ducks everything for the bond chord — two chords over each other would
+    // rob the one moment in the slice that is allowed to be big.
+    api.play('sphere_caught', { gain: clamp(sp.gain + 0.3, 0.5, 1), pan: sp.pan * 0.6 });
+    emit('audio:sting', { name: 'sphere_caught', species: cr?.species ?? null });
+  }
+
+  function onSphereEscaped(p) {
+    const cr = p?.creature;
+    const sp = cr?.position ? spatialOf(cr.position, 8) : { pan: 0, gain: 1 };
+    api.play('sphere_escaped', { gain: clamp(sp.gain + 0.25, 0.45, 1.05), pan: sp.pan });
+    if (cr) {
+      voiceCreature(cr, 'yip', true);
+      const s = ensureCreature(cr);
+      s.cool = 0.9; s.idle = 1.6;      // it grumbles again once it is back on its feet
+    }
+    birdHush = Math.max(birdHush, 3.4);
+    emit('audio:sting', { name: 'sphere_escaped', species: cr?.species ?? null, atShake: p?.atShake ?? null });
+  }
+
+  // =======================================================================
+  // WEAPONS
+  // =======================================================================
+
+  function onWeaponFired(p) {
+    const from = p?.from ?? playerPos();
+    const sp = spatialOf(from, 14);
+    api.play('weapon_fire', {
+      id: p?.id ?? 'pistol',
+      gain: clamp(sp.gain + 0.55, 0.6, 1.15), pan: sp.pan * 0.35,
+    });
+    // the single loudest thing in the game: nothing sings for a while afterwards
+    birdHush = Math.max(birdHush, 7.5);
+    emit('audio:sting', { name: 'weapon_fire', id: p?.id ?? null });
+  }
+
+  function onWeaponImpact(p) {
+    const pt = p?.point;
+    if (!pt) return;
+    const sp = spatialOf(pt, 12);
+    // a hit at 90 m should be a distant tick, not a slap on the ear
+    api.play('weapon_impact', { surface: p?.surface ?? 'dirt', gain: clamp(sp.gain * 1.3, 0.05, 1), pan: sp.pan });
+  }
+
+  function onWeaponHit(p) {
+    const cr = p?.creature;
+    const sp = cr?.position ? spatialOf(cr.position, 10) : { pan: 0, gain: 1 };
+    api.play('weapon_flesh', { gain: clamp(sp.gain + 0.15, 0.25, 1), pan: sp.pan });
+    // A held rifle trigger lands ten rounds a second. Forcing a yelp on each one turns a
+    // frightened animal into a machine gun of its own, so the cry is throttled to the
+    // rate a real one could make it — the thud of every round still lands.
+    if (cr && hitVoiceCool <= 0) {
+      hitVoiceCool = 0.42;
+      voiceCreature(cr, 'yip', true);
+    }
+    birdHush = Math.max(birdHush, 7.5);
+    emit('audio:sting', { name: 'weapon_hit', species: cr?.species ?? null, exhausted: !!p?.exhausted });
+  }
+
+  function onWeaponDry(p) {
+    api.play('weapon_dry', { gain: 0.9, id: p?.id ?? null });
+  }
+
+  function onWeaponReload(p) {
+    const phase = p?.phase;
+    // 'start' and 'magout' arrive on the same frame and mean the same thing; 'cancel'
+    // gets the settle tick so an interrupted reload is audibly interrupted.
+    if (phase === 'start') return;
+    api.play('weapon_reload', { phase: phase === 'cancel' ? 'done' : phase, gain: phase === 'done' ? 0.7 : 0.95 });
+  }
+
+  function onWeaponAim(p) {
+    api.play('weapon_aim', { aiming: !!p?.aiming, gain: 0.85 });
+  }
+
+  /**
+   * Spent. Not hurt, not dying — winded, and it is the audio layer's job to make that
+   * unambiguous, because a sound that reads as damage in a game with no death is a lie
+   * the player will believe. A low sagging grumble is an animal getting its breath back.
+   */
+  function onExhausted(p) {
+    const cr = p?.creature;
+    if (!cr) return;
+    const s = ensureCreature(cr);
+    s.cool = 0; voiceCool = 0;
+    voiceCreature(cr, 'grumble', true);
+    s.cool = 2.2;
+    s.idle = 3.0;
+    emit('audio:sting', { name: 'exhausted', species: cr.species ?? null });
   }
 
   // ---- the field kit ------------------------------------------------------

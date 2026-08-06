@@ -17,6 +17,31 @@ import * as THREE from 'three';
  *
  * On top of that: asymmetric follow lag, terrain collision, sprint FOV kick and a
  * gentle aim bias toward whatever creature the player is closest to.
+ *
+ * ---------------------------------------------------------------------------
+ * THE SHOULDER CAM (added when weapons and spheres arrived)
+ *
+ * `p.aim` is 0..1 and comes straight off `weapons.aimBlend()` (or the sphere system's
+ * own ramp). EVERY aim-driven change is a lerp on that one number, both directions, so
+ * entering and leaving aim is the same curve run forwards and backwards and nothing can
+ * pop. What it moves:
+ *
+ *   distance 2.30 -> 1.45 m     the camera comes in over the back
+ *   shoulder 0.70 -> 0.42 m     at 1.45 m that is 16 deg off axis, which puts the
+ *                               avatar's body centre at ~29% of frame width — the
+ *                               classic third-person aim framing. Keeping 0.70 m at
+ *                               1.45 m would shove the character off the edge.
+ *   pivot    +0.11 m            you look OVER the shoulder, not through it
+ *   fov      62 -> 51 deg       (p.aimFov only: a thrown sphere needs to see the
+ *                               ground it lands on, so only guns narrow the lens)
+ *   lag      x1.6               an aiming camera that lags is an aiming camera that
+ *                               lies about where the round is going
+ *   creature bias -> 0          the gentle lean toward a nearby creature IS aim assist
+ *                               once a gun is up, and it would make the crosshair
+ *                               disagree with the shot. It is switched off entirely.
+ *
+ * The recoil kick is NOT applied here. It is applied in player/index.js postUpdate(),
+ * after src/weapons has already read the camera for the frame — see the note there.
  */
 
 const clamp = THREE.MathUtils.clamp;
@@ -34,12 +59,17 @@ export const CAM = {
   minPitch: -0.62,
   maxPitch: 0.80,
   clearance: 0.42,
+  // ---- shoulder-aim pose ----
+  aimDist: 1.45,
+  aimShoulder: 0.42,
+  aimPivot: 0.11,
+  aimFov: 51,
 };
 
 export function createCameraRig() {
   const pivot = new THREE.Vector3();
   const smoothPivot = new THREE.Vector3();
-  const aim = new THREE.Vector3();
+  const aimPt = new THREE.Vector3();
   const smoothAim = new THREE.Vector3();
   const want = new THREE.Vector3();
   const dir = new THREE.Vector3();
@@ -55,6 +85,7 @@ export function createCameraRig() {
   let rollSm = 0;
   let biasSm = 0;
   let framing = 0;               // 0 normal, 1 intimate "interaction" framing
+  let aimSm = 0;                 // last aim blend seen, for snapshot()
   let initialised = false;
   let override = null;
   const biasTarget = new THREE.Vector3();
@@ -74,7 +105,8 @@ export function createCameraRig() {
     zoom(w) { distUser = clamp(distUser + w * 0.28, -0.45, 1.9); },
 
     /**
-     * @param p { pos:Vector3, speed, sprintT, crouchT, grounded, turnRate }
+     * @param p { pos:Vector3, speed, sprintT, crouchT, grounded, turnRate, aim, aimFov }
+     *          `aim` 0..1 drives the shoulder pose, `aimFov` 0..1 the lens (guns only).
      * @param focus Vector3|null  a creature of interest to bias the aim toward
      * @param groundAt (x,z)=>y
      */
@@ -89,12 +121,20 @@ export function createCameraRig() {
         return;
       }
 
+      const aim = clamp(p.aim ?? 0, 0, 1);
+      const aimFov = clamp(p.aimFov ?? 0, 0, 1);
+      aimSm = aim;
+
       // ---- pivot: upper back, damped harder vertically than horizontally ----
-      const bobRun = Math.sin(p.animPhase * Math.PI * 4) * 0.012 * p.sprintT;
-      pivot.set(p.pos.x, p.pos.y + CAM.pivotY - p.crouchT * 0.30 + bobRun, p.pos.z);
+      const bobRun = Math.sin(p.animPhase * Math.PI * 4) * 0.012 * p.sprintT * (1 - aim * 0.7);
+      pivot.set(p.pos.x,
+        p.pos.y + CAM.pivotY + CAM.aimPivot * aim - p.crouchT * 0.30 + bobRun,
+        p.pos.z);
       if (!initialised) { smoothPivot.copy(pivot); }
-      const lagH = p.grounded ? 12.5 : 9.0;
-      const lagV = p.grounded ? 7.5 : 4.5;
+      // an aiming camera that lags is an aiming camera that lies about where the round goes
+      const tighten = 1 + aim * 0.6;
+      const lagH = (p.grounded ? 12.5 : 9.0) * tighten;
+      const lagV = (p.grounded ? 7.5 : 4.5) * tighten;
       smoothPivot.x = damp(smoothPivot.x, pivot.x, lagH, dt);
       smoothPivot.z = damp(smoothPivot.z, pivot.z, lagH, dt);
       smoothPivot.y = damp(smoothPivot.y, pivot.y, lagV, dt);
@@ -103,46 +143,52 @@ export function createCameraRig() {
       const baseDist = THREE.MathUtils.lerp(
         THREE.MathUtils.lerp(CAM.dist, CAM.distSprint, p.sprintT),
         CAM.distCrouch, p.crouchT) + distUser;
-      const targetDist = THREE.MathUtils.lerp(baseDist, 2.05, framing);
-      distSm = damp(distSm, targetDist, 6.5, dt);
+      // The aim pose wins over both the interaction framing and the sprint pull-back:
+      // it is the only one of the three the player is actively asking for.
+      const targetDist = THREE.MathUtils.lerp(
+        THREE.MathUtils.lerp(baseDist, 2.05, framing), CAM.aimDist, aim);
+      distSm = damp(distSm, targetDist, 6.5 + aim * 5, dt);
 
-      const targetFov = THREE.MathUtils.lerp(
+      const targetFov = THREE.MathUtils.lerp(THREE.MathUtils.lerp(
         CAM.fov + p.sprintT * (CAM.fovSprint - CAM.fov) + (p.grounded ? 0 : 1.2),
-        57, framing);
-      fovSm = damp(fovSm, targetFov, 4.5, dt);
+        57, framing), CAM.aimFov, aimFov);
+      fovSm = damp(fovSm, targetFov, 4.5 + aimFov * 5, dt);
 
       // ---- basis ------------------------------------------------------------
       const cp = Math.cos(pitch), sp = Math.sin(pitch);
       dir.set(-Math.sin(yaw) * cp, sp, -Math.cos(yaw) * cp).normalize();
       right.copy(dir).cross(UP).normalize();
 
-      const shoulder = CAM.shoulder * (1 + framing * 0.22);
-      aim.copy(smoothPivot).addScaledVector(right, shoulder);
+      const shoulder = THREE.MathUtils.lerp(CAM.shoulder * (1 + framing * 0.22), CAM.aimShoulder, aim);
+      aimPt.copy(smoothPivot).addScaledVector(right, shoulder);
 
       // ---- creature aim bias ------------------------------------------------
+      // Off entirely once the player is aiming: a camera that leans toward a creature
+      // while a gun is up is silent aim assist, and it makes the crosshair a liar.
       let bias = 0;
-      if (focus) {
+      if (focus && aim < 0.999) {
         tmp.copy(focus).sub(smoothPivot);
         const d = tmp.length();
         if (d > 1.0 && d < 16) {
           tmp.divideScalar(d);
           const align = tmp.dot(dir);
           if (align > 0.45) {
-            bias = clamp((align - 0.45) / 0.4, 0, 1) * clamp((16 - d) / 8, 0, 1);
+            bias = clamp((align - 0.45) / 0.4, 0, 1) * clamp((16 - d) / 8, 0, 1) * (1 - aim);
             biasTarget.copy(focus);
           }
         }
       }
       biasSm = damp(biasSm, bias, 3.0, dt);
       if (biasSm > 0.001) {
-        tmp.copy(biasTarget).sub(aim);
-        aim.addScaledVector(tmp, biasSm * (0.14 + framing * 0.26));
+        tmp.copy(biasTarget).sub(aimPt);
+        aimPt.addScaledVector(tmp, biasSm * (0.14 + framing * 0.26));
       }
 
-      if (!initialised) smoothAim.copy(aim);
-      smoothAim.x = damp(smoothAim.x, aim.x, 16, dt);
-      smoothAim.y = damp(smoothAim.y, aim.y, 12, dt);
-      smoothAim.z = damp(smoothAim.z, aim.z, 16, dt);
+      if (!initialised) smoothAim.copy(aimPt);
+      const aimLag = 1 + aim * 0.9;
+      smoothAim.x = damp(smoothAim.x, aimPt.x, 16 * aimLag, dt);
+      smoothAim.y = damp(smoothAim.y, aimPt.y, 12 * aimLag, dt);
+      smoothAim.z = damp(smoothAim.z, aimPt.z, 16 * aimLag, dt);
 
       // ---- desired eye, then terrain collision -------------------------------
       want.copy(smoothPivot).addScaledVector(right, shoulder).addScaledVector(dir, -distSm);
@@ -168,7 +214,9 @@ export function createCameraRig() {
       camera.lookAt(smoothAim);
 
       // a whisper of roll when hard-turning; enough to feel, not enough to notice
-      rollSm = damp(rollSm, clamp(-(p.turnRate ?? 0) * 0.035, -0.03, 0.03), 4, dt);
+      // ...and none of it once the gun is up: a rolling frame under a fixed crosshair
+      // reads as drift the player cannot correct for.
+      rollSm = damp(rollSm, clamp(-(p.turnRate ?? 0) * 0.035, -0.03, 0.03) * (1 - aim), 4, dt);
       if (Math.abs(rollSm) > 1e-4) camera.rotateZ(rollSm);
 
       if (Math.abs(camera.fov - fovSm) > 0.01) { camera.fov = fovSm; camera.updateProjectionMatrix(); }
@@ -180,6 +228,7 @@ export function createCameraRig() {
         pitchDeg: +THREE.MathUtils.radToDeg(pitch).toFixed(1),
         dist: +distSm.toFixed(2), fov: +fovSm.toFixed(1),
         collide: +collide.toFixed(2), bias: +biasSm.toFixed(2),
+        aim: +aimSm.toFixed(3), shoulder: +THREE.MathUtils.lerp(CAM.shoulder, CAM.aimShoulder, aimSm).toFixed(2),
       };
     },
   };

@@ -21,6 +21,14 @@
  *        `hazeDesat` drive the depth pass, which mixes toward the sky's own horizon
  *        radiance in scene-referred linear.
  *
+ *        NOTE ON THE UNITS: `hazeRange` used to be the WIDTH of a smoothstep ramp and
+ *        is now the E-FOLDING DISTANCE of an exponential extinction (see passes.js).
+ *        The daylight `haze` values therefore roughly doubled -- they are now the
+ *        asymptote the far plane converges to, not the value reached at the end of a
+ *        ramp, and the old ones had the mid-ground at a 16% mix toward the sky, which
+ *        is invisible. Do not read the daylight numbers as "twice as much fog": at
+ *        200 m they are very close to what they always were.
+ *
  * Everything here is display-referred and applied AFTER the ACES tone curve, except
  * exposure / white balance / bloom, which are scene-referred.
  */
@@ -36,10 +44,11 @@ const NIGHT = {
   shadowTint: [0.86, 0.94, 1.20],
   highTint: [1.10, 1.00, 0.88],
   satLow: 0.78, satHigh: 1.10,
-  greenShift: 0.06, greenSat: 0.8,
+  greenShift: 0.06, greenSat: 0.84,
   bloomThreshold: 0.42, bloomKnee: 0.30, bloomStrength: 0.62, bloomTint: [1.06, 0.98, 0.86],
   vignette: 0.26, vigStart: 0.46,
-  haze: 0.28, hazeStart: 130, hazeRange: 1000, hazeDesat: 0.55,
+  haze: 0.32, hazeStart: 130, hazeRange: 900, hazeDesat: 0.60,
+  hazeNear: 0.08, hazeNearRange: 70,
   white: 0.94, kneeStart: 0.74,
   aberration: 1.15, grain: 0.017,
 };
@@ -54,11 +63,12 @@ const DAWN = {
   power: [0.78, 0.785, 0.795],
   shadowTint: [0.90, 0.96, 1.18],
   highTint: [1.10, 1.01, 0.90],
-  satLow: 1.04, satHigh: 1.22,
-  greenShift: 0.14, greenSat: 0.79,
+  satLow: 1.13, satHigh: 1.22,
+  greenShift: 0.14, greenSat: 0.99,
   bloomThreshold: 0.82, bloomKnee: 0.42, bloomStrength: 0.32, bloomTint: [1.04, 1.0, 0.94],
   vignette: 0.18, vigStart: 0.46,
-  haze: 0.5, hazeStart: 95, hazeRange: 900, hazeDesat: 0.82,
+  haze: 0.90, hazeStart: 75, hazeRange: 720, hazeDesat: 0.94,
+  hazeNear: 0.26, hazeNearRange: 60,
   white: 0.95, kneeStart: 0.78,
   aberration: 0.9, grain: 0.011,
 };
@@ -73,11 +83,12 @@ const MORNING = {
   power: [0.795, 0.80, 0.81],
   shadowTint: [0.90, 0.965, 1.17],
   highTint: [1.08, 1.01, 0.925],
-  satLow: 1.03, satHigh: 1.22,
-  greenShift: 0.15, greenSat: 0.77,
+  satLow: 1.12, satHigh: 1.22,
+  greenShift: 0.15, greenSat: 0.91,
   bloomThreshold: 0.9, bloomKnee: 0.42, bloomStrength: 0.26, bloomTint: [1.02, 1.0, 0.97],
   vignette: 0.17, vigStart: 0.46,
-  haze: 0.46, hazeStart: 100, hazeRange: 930, hazeDesat: 0.8,
+  haze: 0.88, hazeStart: 70, hazeRange: 780, hazeDesat: 0.93,
+  hazeNear: 0.22, hazeNearRange: 60,
   white: 0.95, kneeStart: 0.78,
   aberration: 0.85, grain: 0.010,
 };
@@ -93,10 +104,11 @@ const NOON = {
   shadowTint: [0.89, 0.955, 1.19],
   highTint: [1.075, 1.01, 0.935],
   satLow: 0.98, satHigh: 1.23,
-  greenShift: 0.15, greenSat: 0.62,
+  greenShift: 0.15, greenSat: 0.68,
   bloomThreshold: 0.95, bloomKnee: 0.42, bloomStrength: 0.22, bloomTint: [1.0, 1.0, 0.99],
   vignette: 0.16, vigStart: 0.46,
-  haze: 0.38, hazeStart: 60, hazeRange: 980, hazeDesat: 0.72,
+  haze: 0.86, hazeStart: 60, hazeRange: 800, hazeDesat: 0.92,
+  hazeNear: 0.20, hazeNearRange: 60,
   white: 0.95, kneeStart: 0.8,
   aberration: 0.85, grain: 0.010,
 };
@@ -112,17 +124,18 @@ const GOLDEN = {
   shadowTint: [0.88, 0.945, 1.20],
   highTint: [1.12, 1.01, 0.88],
   satLow: 0.99, satHigh: 1.24,
-  greenShift: 0.14, greenSat: 0.64,
+  greenShift: 0.14, greenSat: 0.71,
   bloomThreshold: 0.88, bloomKnee: 0.40, bloomStrength: 0.3, bloomTint: [1.07, 1.0, 0.90],
   vignette: 0.2, vigStart: 0.46,
-  haze: 0.42, hazeStart: 65, hazeRange: 940, hazeDesat: 0.74,
+  haze: 0.88, hazeStart: 65, hazeRange: 760, hazeDesat: 0.93,
+  hazeNear: 0.22, hazeNearRange: 60,
   white: 0.95, kneeStart: 0.78,
   aberration: 1.0, grain: 0.011,
 };
 
 const DUSK = {
   key: 'dusk',
-  exposure: 2.44,
+  exposure: 2.10,
   whiteBalance: [1.04, 0.985, 1.045],
   // A contrast of 0.92 on a night frame is a flattener: dusk measured 1.7 local
   // contrast and 146 distinct colours against pw_16's 5.2 and 422, at the SAME mean
@@ -137,17 +150,18 @@ const DUSK = {
   // therefore dropped the whole frame to mean 31 (measured). 0.02 sits just under
   // the frame's mean, and the lost lift is put back through `offset`, which is
   // applied after the pivot and is the correct place for it.
-  contrast: 1.20, pivot: 0.02,
+  contrast: 1.48, pivot: 0.02,
   slope: [1.0, 1.0, 1.0],
   offset: [0.017, 0.020, 0.033],
   power: [1.01, 1.0, 0.975],
-  shadowTint: [0.895, 0.95, 1.18],
-  highTint: [1.09, 0.985, 0.93],
-  satLow: 1.06, satHigh: 1.36,
-  greenShift: 0.10, greenSat: 0.76,
+  shadowTint: [0.80, 0.92, 1.30],
+  highTint: [1.18, 0.98, 0.84],
+  satLow: 1.50, satHigh: 1.52,
+  greenShift: 0.10, greenSat: 0.92,
   bloomThreshold: 0.55, bloomKnee: 0.36, bloomStrength: 0.55, bloomTint: [1.08, 0.99, 0.90],
   vignette: 0.2, vigStart: 0.46,
-  haze: 0.34, hazeStart: 110, hazeRange: 950, hazeDesat: 0.58,
+  haze: 0.38, hazeStart: 110, hazeRange: 850, hazeDesat: 0.58,
+  hazeNear: 0.08, hazeNearRange: 70,
   white: 0.94, kneeStart: 0.76,
   aberration: 1.1, grain: 0.014,
 };
@@ -171,7 +185,7 @@ export const NAMED = {
 
 const KEYS_F = ['exposure', 'contrast', 'pivot', 'satLow', 'satHigh', 'greenShift', 'greenSat',
   'bloomThreshold', 'bloomKnee', 'bloomStrength', 'vignette', 'vigStart', 'aberration', 'grain',
-  'haze', 'hazeStart', 'hazeRange', 'hazeDesat', 'white', 'kneeStart'];
+  'haze', 'hazeStart', 'hazeRange', 'hazeDesat', 'hazeNear', 'hazeNearRange', 'white', 'kneeStart'];
 const KEYS_V = ['whiteBalance', 'slope', 'offset', 'power', 'shadowTint', 'highTint', 'bloomTint'];
 
 function lerp(a, b, k) { return a + (b - a) * k; }

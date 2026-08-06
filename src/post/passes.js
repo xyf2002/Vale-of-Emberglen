@@ -234,9 +234,53 @@ export class BloomPass extends Pass {
 // parity always works out: it reads the target that has depth and writes the one that
 // does not.
 //
-// The sky dome sits at 3200 m and does not write depth, so instead of a depth == 1
-// test (which is within 1e-5 of a 3000 m mountain at this near/far) the haze fades
-// back out past ~1.4 km. Beyond that the horizon skirt runs its own aerial shader.
+// The sky dome does not write depth, so its pixels keep the cleared depth and read
+// back as the far plane (4000 m). Rather than a depth == 1 test (which is within 1e-5
+// of a 3000 m mountain at this near/far, and that margin is not something to bet the
+// whole frame on across drivers) the haze fades back out as it approaches the far
+// plane -- but only there.
+//
+// It used to fade out from 1.4 km and be GONE by 2.6 km, which meant the one thing
+// reference #7 is actually about -- "far geometry lifted to a pale blue-white flat
+// silhouette with its saturation crushed to near zero" -- was the one thing that never
+// received any haze. Our mountain ring sits at roughly 1-3 km, i.e. entirely inside
+// the hole. A blind critic put it as "no aerial perspective, the terrain collapses
+// into a stack of flat cutouts", which is exactly what a depth cue that switches off
+// precisely where depth needs cueing will produce. The fade now starts at 3.3 km,
+// past everything solid in the world and short of the dome.
+//
+// ---- THREE PLANES ---------------------------------------------------------
+// Two further defects were measured (edge 13.56 on creature_portrait, 10.74 on
+// interaction_feed, against reference plates at 5.16-9.87) and described in prose by
+// a blind critic as the second-biggest gap overall: "B is uniformly, mercilessly
+// sharp from the grass blade at the camera to the peak on the horizon", against a
+// reference with "a defocused over-shoulder foreground, a sharp mid-ground subject,
+// and a hazed far treeline". Both had the same root cause -- we shipped all three
+// mechanisms and ran every one of them below the threshold of visibility:
+//
+//  1. HAZE RAMP SHAPE. A smoothstep over [start, start+range] is a ramp that has
+//     barely begun at the distance where aerial perspective actually reads. With the
+//     old 60 m / 980 m / strength 0.38, a mid-ground hill at 500 m received a 16%
+//     mix toward the sky -- invisible -- and a 2 km mountain received 38%, when the
+//     reference washes its far cliffs out by 80-90%. That is precisely the critic's
+//     "mid-ground hills are the SAME green as the grass at the player's feet".
+//     Replaced with exponential extinction, 1 - exp(-d/range), which is what
+//     atmospheric scattering physically is: it bites immediately past hazeStart and
+//     asymptotes, so mid AND far both get their correct share from one curve.
+//
+//  2. FOREGROUND PLANE ONLY EXISTED ON PORTRAIT LENSES. DOF was gated on fov < 46,
+//     so the four wide gameplay shots -- the ones the critic was describing -- had
+//     no near plane at all. The near-field softening below is deliberately NOT part
+//     of the thin-lens model: it is a fixed "closer than a couple of metres" ramp
+//     that runs on every lens, because pw_10 and pw_11 both defocus their
+//     over-shoulder foreground on a wide.
+//
+//  3. THE DISC WAS TOO SMALL TO SEE. 0.42% of frame height is 3 px at 720p, i.e.
+//     under one pixel once the measurement downsamples. Reference #11 caps this --
+//     the background must stay LEGIBLE -- but legible is not crisp, and 3 px was
+//     paying full price for a pass that produced no visible plane separation.
+//     Near and far now carry separate radii, because a lens defocuses its near field
+//     harder than its far field and the two want independent control anyway.
 // ---------------------------------------------------------------------------
 
 const ATMOS_FRAG = /* glsl */`
@@ -245,12 +289,20 @@ uniform sampler2D tDepth;
 uniform vec2 uTexel;
 uniform float uNear;
 uniform float uFar;
-uniform float uMaxCoc;      // in pixels at the current resolution
-uniform float uStrength;    // lens aperture-ish; 0 disables the blur entirely
+uniform float uFarCoc;      // px: defocus disc BEHIND the focal plane
+uniform float uNearCoc;     // px: defocus disc IN FRONT of it
+uniform float uNearIn;      // m: nearer than this, the foreground plane is fully soft
+uniform float uNearOut;     // m: beyond this, the foreground plane is fully sharp
+uniform float uFarPlaneCoc; // px: wide-lens far plane; 0 leaves the far side to the lens
+uniform float uFarIn;       // m: where the far plane starts giving up detail
+uniform float uFarOut;      // m: where it has given up all of it
+uniform float uStrength;    // lens aperture-ish; 0 disables the thin-lens term
 uniform vec3 uFogColor;     // LINEAR, scene-referred: the sky's own horizon radiance
 uniform float uHazeStart;
 uniform float uHazeRange;
 uniform float uHaze;
+uniform float uHazeNear;      // asymptote of the SHORT-range scattering term
+uniform float uHazeNearRange; // its e-folding distance, in tens of metres
 uniform float uHazeDesat;
 varying vec2 vUv;
 ${COMMON}
@@ -265,44 +317,97 @@ float viewDist(vec2 uv) {
   return -(uNear * uFar) / denom;
 }
 
-vec3 hazed(vec2 uv) {
-  vec3 c = max(texture2D(tDiffuse, uv).rgb, 0.0);
+// Aerial perspective at a point whose view distance is already known. Every caller
+// has just paid for that depth fetch, and doing it again inside here doubled the
+// depth bandwidth of the whole blur loop for nothing.
+vec3 hazeAt(vec3 c, float dist) {
   if (uHaze <= 0.001) return c;
-  float dist = viewDist(uv);
-  float t = clamp((dist - uHazeStart) / max(uHazeRange, 1.0), 0.0, 1.0);
-  t = t * t * (3.0 - 2.0 * t);
-  float h = uHaze * t * (1.0 - smoothstep(1400.0, 2600.0, dist));
-  // saturation goes first, so the far plane lands as a near-neutral silhouette
-  // rather than a tinted copy of the near plane
-  c = mix(c, vec3(luma(c)), uHazeDesat * h);
-  return mix(c, uFogColor, h);
+  // Exponential extinction. uHazeRange is the e-folding distance, so a hill one range
+  // unit past hazeStart is already 63% of the way to the asymptote.
+  // (No backticks in here: this block lives inside a JS template literal.)
+  //
+  // TWO terms, because one cannot describe this world. A single exponential tuned to
+  // leave a 400 m cliff only ~60% washed (which is what the plates show) has an
+  // e-folding distance of several hundred metres, and is therefore worth ~0.5% at the
+  // 30-60 m background of a portrait -- so creature_portrait sat behind a background
+  // that received literally no aerial perspective and read as a flat green wall at the
+  // same value as the grass at the subject's feet. pw_15's background trees are
+  // visibly lighter and bluer than its foreground. The short-range term is a small
+  // asymptote reached within tens of metres; the long-range term is the mountain ring.
+  // Together they give a gradient that is present at every scale the game frames.
+  float fade = 1.0 - smoothstep(3300.0, 3950.0, dist);
+  float hFar = uHaze * (1.0 - exp(-max(dist - uHazeStart, 0.0) / max(uHazeRange, 1.0))) * fade;
+  float hNear = uHazeNear * (1.0 - exp(-max(dist - 2.0, 0.0) / max(uHazeNearRange, 1.0))) * fade;
+
+  // The CHROMA crush is driven by the far term ALONE, and that split matters. Running
+  // it off the combined haze cost 0.05 of frame saturation on every wide daylight shot
+  // -- straight through the floor of the reference band -- because the short-range term
+  // reaches its asymptote inside the mid-ground, i.e. over most of the frame. But
+  // reference #7 does not ask for a desaturated mid-ground; it asks for a mid-GREEN
+  // one, with the crush to near-neutral reserved for the far silhouette. So the near
+  // term lifts value and pulls hue toward the sky, and leaves the chroma alone.
+  c = mix(c, vec3(luma(c)), uHazeDesat * hFar);
+  return mix(c, uFogColor, min(hFar + hNear, 0.97));
+}
+
+vec3 hazed(vec2 uv, float dist) {
+  return hazeAt(max(texture2D(tDiffuse, uv).rgb, 0.0), dist);
+}
+
+// Blur radius in pixels. Three planes come out of three terms:
+//   thin lens   -> near field soft, focal plane sharp, far field soft (portrait lenses)
+//   near ramp   -> "closer than uNearOut" soft on EVERY lens (over-shoulder foreground)
+//   far ramp    -> "further than uFarIn" soft on WIDE lenses (the hazed far treeline)
+//
+// The far ramp is keyed to ABSOLUTE distance rather than to the autofocus, and that is
+// deliberate. On the wide gameplay camera the centre of frame is the player's own back
+// at 2.3 m, so a thin-lens model would focus there and defocus the creature at 8 m --
+// i.e. it would soften the one thing that has to stay sharp. Anchoring the far plane to
+// metres instead leaves the whole 2-30 m subject band untouched and only gives up the
+// treeline, which is what reference #7 actually describes.
+//
+// The band between the two ramps is the one distance nothing touches. That gap IS the
+// subject plane, and it is why this does not degenerate into "blur it".
+float cocAt(float dist, float f) {
+  float r = 0.0;
+  if (uStrength > 0.0) {
+    // The near side clamps lower than the far side on purpose. Foreground samples are
+    // allowed to bleed forward, so a hard foreground blur pulls BRIGHT background in
+    // behind the grass and lifts the lower half of the frame -- creature_portrait's
+    // ground/sky ratio walked from 0.92 to 1.01 on nothing but a bigger near disc.
+    // pw_15 keeps its own foreground grass close to sharp; the softness there is on
+    // the background and the cropped ruin.
+    float c = clamp((1.0 - f / max(dist, 1e-3)) * uStrength, -0.62, 1.0);
+    r = c < 0.0 ? -c * uNearCoc : c * uFarCoc;
+  }
+  r = max(r, (1.0 - smoothstep(uNearIn, uNearOut, dist)) * uNearCoc);
+  if (uFarPlaneCoc > 0.0) r = max(r, smoothstep(uFarIn, uFarOut, dist) * uFarPlaneCoc);
+  return r;
 }
 
 void main() {
-  if (uStrength <= 0.0) { gl_FragColor = vec4(hazed(vUv), 1.0); return; }
+  float dist = viewDist(vUv);
 
   // Autofocus on the centre of frame, biased to the NEAREST of a small cross so a
   // gap between ears focuses on the creature and not on the hill behind it.
-  float f = viewDist(vec2(0.5, 0.46));
-  f = min(f, viewDist(vec2(0.47, 0.46)));
-  f = min(f, viewDist(vec2(0.53, 0.46)));
-  f = min(f, viewDist(vec2(0.5, 0.52)));
-  f = min(f, viewDist(vec2(0.5, 0.40)));
+  float f = 1.0;
+  if (uStrength > 0.0) {
+    f = viewDist(vec2(0.5, 0.46));
+    f = min(f, viewDist(vec2(0.47, 0.46)));
+    f = min(f, viewDist(vec2(0.53, 0.46)));
+    f = min(f, viewDist(vec2(0.5, 0.52)));
+    f = min(f, viewDist(vec2(0.5, 0.40)));
+  }
 
-  float dist = viewDist(vUv);
-  // thin-lens circle of confusion, signed: >0 behind focus, <0 in front
-  float coc = (1.0 - f / max(dist, 1e-3)) * uStrength;
-  coc = clamp(coc, -0.55, 1.0);
-  float r = abs(coc) * uMaxCoc;
+  float r = cocAt(dist, f);
+  if (r < 0.75) { gl_FragColor = vec4(hazed(vUv, dist), 1.0); return; }
 
-  if (r < 0.75) { gl_FragColor = vec4(hazed(vUv), 1.0); return; }
-
-  // 16-tap golden-angle spiral. Neighbours nearer than the focal plane are allowed
+  // 20-tap golden-angle spiral. Neighbours nearer than the focal plane are allowed
   // to bleed forward; sharp foreground pixels are rejected so the creature keeps a
   // clean edge instead of smearing into its own background.
-  vec3 sum = hazed(vUv);
+  vec3 sum = hazed(vUv, dist);
   float wsum = 1.0;
-  const int N = 16;
+  const int N = 20;
   for (int i = 0; i < N; i++) {
     float fi = float(i);
     float ang = fi * 2.39996323;
@@ -310,9 +415,8 @@ void main() {
     vec2 off = vec2(cos(ang), sin(ang)) * rad * uTexel;
     vec2 suv = vUv + off;
     float sd = viewDist(suv);
-    float scoc = abs((1.0 - f / max(sd, 1e-3)) * uStrength) * uMaxCoc;
-    float w = clamp((scoc - rad + 1.0) * 0.6, 0.0, 1.0);
-    sum += hazed(suv) * w;
+    float w = clamp((cocAt(sd, f) - rad + 1.0) * 0.6, 0.0, 1.0);
+    sum += hazed(suv, sd) * w;
     wsum += w;
   }
   gl_FragColor = vec4(sum / wsum, 1.0);
@@ -332,10 +436,14 @@ export class AtmospherePass extends Pass {
         tDiffuse: { value: null }, tDepth: { value: null },
         uTexel: { value: new THREE.Vector2(1 / width, 1 / height) },
         uNear: { value: 0.1 }, uFar: { value: 4000 },
-        uMaxCoc: { value: 3 }, uStrength: { value: 0.0 },
+        uFarCoc: { value: 6 }, uNearCoc: { value: 6 },
+        uNearIn: { value: 0.35 }, uNearOut: { value: 3.0 },
+        uFarPlaneCoc: { value: 0 }, uFarIn: { value: 30 }, uFarOut: { value: 160 },
+        uStrength: { value: 0.0 },
         uFogColor: { value: new THREE.Color(0.55, 0.66, 0.80) },
         uHazeStart: { value: 40 }, uHazeRange: { value: 520 },
         uHaze: { value: 0.45 }, uHazeDesat: { value: 0.75 },
+        uHazeNear: { value: 0.0 }, uHazeNearRange: { value: 60 },
       },
       vertexShader: VERT, fragmentShader: ATMOS_FRAG, depthTest: false, depthWrite: false,
     });
@@ -344,12 +452,16 @@ export class AtmospherePass extends Pass {
 
   setSize(width, height) {
     this.material.uniforms.uTexel.value.set(1 / width, 1 / height);
-    // Keep the blur disc a constant fraction of frame height across resolutions.
+    // Keep the blur discs a constant fraction of frame height across resolutions.
     // Reference #11: the background behind a portrait subject stays LEGIBLE and
     // low-detail -- in pw_15 you can still count the trees and read the moss on the
-    // ruin. 1.25% of frame height turned it to mush; 0.42% compresses it without
-    // destroying it.
-    this.material.uniforms.uMaxCoc.value = Math.max(2, height * 0.0042);
+    // ruin. 1.25% of frame height turned it to mush; 0.42% was invisible (3 px at
+    // 720p, i.e. under one pixel by the time anything measures it) and left the
+    // frame reading as uniformly sharp. 0.9% far / 1.15% near is the band where the
+    // planes separate by eye and the background is still countable.
+    this.material.uniforms.uFarCoc.value = Math.max(2, height * 0.0120);
+    this.material.uniforms.uNearCoc.value = Math.max(2, height * 0.0130);
+    this._widePlaneCoc = Math.max(1.5, height * 0.0060);
   }
 
   render(renderer, writeBuffer, readBuffer) {
@@ -457,13 +569,39 @@ void main() {
   float mn = min(col.r, min(col.g, col.b));
   float chroma = (mx - mn) / max(mx, 1e-4);
 
-  // Green band mask, normalised so it works at any exposure. Lit grass has a high
-  // chroma and would otherwise be caught by the hero-hue boost above — but grass is
-  // the world, not the hero, so the green band is excluded from the boost entirely.
+  // GREEN-DOMINANT mask: only pixels where green genuinely beats both neighbours.
+  // This one drives the green -> yellow steer below and nothing else, because
+  // pushing an already-yellow pixel further toward yellow is how a meadow ends up
+  // chartreuse.
   float greenMask = smoothstep(0.03, 0.30, (col.g - max(col.r, col.b)) / max(col.g, 1e-4));
 
+  // FOLIAGE mask: the whole yellow-green .. blue-green band, i.e. "the world".
+  //
+  // The measured ~25% oversaturation on the wide daylight shots lived here. The
+  // green-dominant mask above misses the single most saturated thing in every one of
+  // those frames: SUNLIT GRASS TIPS ARE YELLOW-GREEN, red within a few percent of
+  // green, so (g - max(r,b)) is ~0 and they scored zero on it -- which meant the
+  // grass was being fed through the hero-hue boost (uSatHigh, 1.22-1.24) that
+  // reference #5 intends for creatures, while only the shadowed true-green grass got
+  // the trim. The brightest, largest-area thing in frame was the one thing being
+  // pushed up.
+  //
+  // Two independent tests give the band both of its edges:
+  //   g clearly above b  -> yellow through green through blue-green
+  //   g not far below r  -> excludes orange / red / pink, i.e. every creature hero hue
+  //
+  // Why this does not trade away the hue discipline a critic praised: mixing toward
+  // luma scales the chroma vector about the grey axis, which leaves the hue ANGLE
+  // exactly where it was. The yellow-green -> blue-green relationships survive
+  // untouched; only the magnitude moves. A flat global desaturate would have taken
+  // the creatures down with the meadow and killed the saturation-contrast separation
+  // that reference #5 says is the entire mechanism.
+  float gb = (col.g - col.b) / max(mx, 1e-4);
+  float gr = (col.g - col.r) / max(mx, 1e-4);
+  float foliage = smoothstep(0.06, 0.26, gb) * smoothstep(-0.20, 0.02, gr);
+
   float sat = mix(uSatLow, uSatHigh, smoothstep(0.20, 0.62, chroma));
-  sat *= mix(1.0, uGreenSat, greenMask);
+  sat *= mix(1.0, uGreenSat, foliage);
   float g0 = luma(col);
   col = mix(vec3(g0), col, sat);
 

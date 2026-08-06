@@ -25,6 +25,32 @@ import { createCameraRig, CAM } from './CameraRig.js';
  *   handPosition(out?) -> Vector3    right hand in world space (attach props here)
  *   playGesture(kind)                'offer' | 'pet' — one-shot upper-body animation
  *   grounded, sprintAmount, crouchAmount
+ *   aimAmount -> 0..1                the shoulder-cam blend, for anyone who wants it
+ *
+ * ---------------------------------------------------------------------------
+ * AIMING (added when src/weapons and src/spheres arrived)
+ *
+ * Three separate things come off ONE number so they cannot disagree:
+ *
+ *   aimT = max(weapons.aimBlend(), sphereAim)
+ *
+ * `weapons.aimBlend()` is already an asymmetric ramp (0.2 s in, 0.45 s out) owned by the
+ * weapon system. The sphere system only exposes a boolean `isAiming()`, so its ramp is
+ * built here to the same asymmetric shape rather than snapping.
+ *
+ *   1. the camera goes over the shoulder      (CameraRig, p.aim / p.aimFov)
+ *   2. the body turns to face the CAMERA rather than the direction of travel, so
+ *      strafing round a creature keeps the muzzle on it
+ *   3. the walk slows by `weapons.moveScale()` (~0.6)
+ *
+ * RECOIL is applied in postUpdate(), NOT in update(). src/weapons runs at ORDER 66 —
+ * after this system — and derives the direction of the ROUND from the camera basis plus
+ * its own recoil offset. If the kick were folded into the camera during update(), the
+ * weapon would read an already-kicked camera and add the offset a second time, so every
+ * burst would walk twice as fast as the spring says. postUpdate() runs after every
+ * system's update() and before render(), so the picture kicks and the ballistics do not
+ * double-count. The value is used raw — it is already integrated by the weapon's own
+ * spring and re-integrating it here would ring.
  */
 
 const clamp = THREE.MathUtils.clamp;
@@ -50,7 +76,7 @@ const MOVE = {
 };
 
 export function createPlayer() {
-  let ctx, world, avatar, anim, sky;
+  let ctx, world, avatar, anim, sky, weapons, spheres;
   const position = new THREE.Vector3(0, 0, 0);
   const velocity = new THREE.Vector3();
   const cam = createCameraRig();
@@ -61,7 +87,11 @@ export function createPlayer() {
   let sprintT = 0, crouchT = 0, turnRate = 0, accelFwd = 0;
   let coyote = 0, buffer = 0, anticipT = -1;
   let framingT = 0;
+  let aimT = 0;             // the one blend everything aim-related reads
+  let gunAimT = 0;          // weapons only — the lens narrows for a scope, not a throw
+  let sphereAimT = 0;       // our own ramp over the sphere system's boolean
   let root, contact, contactMat;
+  const UP = new THREE.Vector3(0, 1, 0);
   let focusPos = null;
   const focusVec = new THREE.Vector3();
 
@@ -121,6 +151,7 @@ export function createPlayer() {
     get grounded() { return grounded; },
     get sprintAmount() { return sprintT; },
     get crouchAmount() { return crouchT; },
+    get aimAmount() { return aimT; },
     get eyePosition() {
       const p = new THREE.Vector3();
       if (avatar) avatar.rig.head.getWorldPosition(p);
@@ -161,6 +192,17 @@ export function createPlayer() {
     update(dt, c) {
       const input = c.input;
       sky = sky ?? c.get('sky');
+      weapons = weapons ?? c.get('weapons');
+      spheres = spheres ?? c.get('spheres');
+
+      // ---------------------------------------------------------------- aim
+      // The weapon system owns its own asymmetric ramp; the sphere system only says
+      // yes/no, so give it the same shape here — a wind-up that snaps in and eases out.
+      gunAimT = clamp(weapons?.aimBlend?.() ?? 0, 0, 1);
+      const wantSphereAim = !!spheres?.isAiming?.();
+      sphereAimT = damp(sphereAimT, wantSphereAim ? 1 : 0, wantSphereAim ? 9 : 4.5, dt);
+      if (sphereAimT < 1e-4) sphereAimT = 0;
+      aimT = Math.max(gunAimT, sphereAimT);
 
       // ---------------------------------------------------------------- look
       cam.look(input.look.dx, input.look.dy);
@@ -185,6 +227,10 @@ export function createPlayer() {
       let maxSpeed = THREE.MathUtils.lerp(MOVE.walk, MOVE.sprint, sprintT);
       maxSpeed = THREE.MathUtils.lerp(maxSpeed, MOVE.crouch, crouchT);
       if (anim.gesturing) maxSpeed *= 0.35;
+      // the weapon system's own number, so aiming costs exactly what it says it costs
+      maxSpeed *= clamp(weapons?.moveScale?.() ?? 1, 0.2, 1);
+      // a wind-up with a sphere in hand is not a sprint either
+      maxSpeed *= THREE.MathUtils.lerp(1, 0.72, sphereAimT);
 
       // uphill costs speed, downhill does not give it back
       if (rawMove && grounded) {
@@ -276,7 +322,15 @@ export function createPlayer() {
       // --------------------------------------------------------- body facing
       const planar = Math.hypot(velocity.x, velocity.z);
       const prevBodyYaw = bodyYaw;
-      if (planar > 0.55 && !anim.gesturing) {
+      if (aimT > 0.02 && !anim.gesturing) {
+        // AIMING: face where the camera looks, not where you are going. Blended off the
+        // same 0..1 as the camera, so a player who strafes round a creature while easing
+        // out of aim watches the body rotate back into the direction of travel rather
+        // than snap. `yaw` IS the camera yaw (set above from cam.yaw).
+        const moveTarget = planar > 0.55 ? Math.atan2(-velocity.x, -velocity.z) : bodyYaw;
+        const target = moveTarget + angleDelta(moveTarget, yaw) * aimT;
+        bodyYaw = dampAngle(bodyYaw, target, 10 + aimT * 8, dt);
+      } else if (planar > 0.55 && !anim.gesturing) {
         const target = Math.atan2(-velocity.x, -velocity.z);
         bodyYaw = dampAngle(bodyYaw, target, 13 - sprintT * 3.5, dt);
       } else if (anim.gesturing && focusPos) {
@@ -323,13 +377,36 @@ export function createPlayer() {
 
       // -------------------------------------------------------------- camera
       framingT = Math.max(0, framingT - dt);
-      cam.setFraming(clamp(framingT / 0.6, 0, 1) * 0.9);
+      // the intimate interaction framing has no business fighting a raised weapon
+      cam.setFraming(clamp(framingT / 0.6, 0, 1) * 0.9 * (1 - aimT));
 
       focusPos = pickFocus(c);
       cam.update(dt, c.camera, {
         pos: position, speed: planar, sprintT, crouchT: crouchT,
         grounded, turnRate, animPhase: anim.state.phase,
+        aim: aimT, aimFov: gunAimT,
       }, focusPos, groundAt);
+    },
+
+    /**
+     * The recoil kick. See the note at the top of the file for why this lives in
+     * postUpdate and not in update: src/weapons already folds the same offset into the
+     * direction of the round during its own update, so kicking the camera any earlier
+     * would apply it twice.
+     *
+     * It is added, never integrated. `weapons.recoil()` is the output of two springs and
+     * a leaky residual that the weapon system steps itself; wrapping another spring
+     * around it here would put a second pole in the loop and make a burst ring.
+     */
+    postUpdate(dt, c) {
+      const r = (weapons ?? c.get('weapons'))?.recoil?.();
+      if (!r) return;
+      const p = r.pitch || 0, y = r.yaw || 0;
+      if (Math.abs(p) < 1e-5 && Math.abs(y) < 1e-5) return;
+      const camera = c.camera;
+      camera.rotateX(p);                       // muzzle rise: the frame lifts
+      camera.rotateOnWorldAxis(UP, y);         // ...and walks sideways, about world up,
+      camera.updateMatrixWorld();              // so the kick never rolls the horizon
     },
 
     getForward() { return new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw)); },
@@ -343,7 +420,7 @@ export function createPlayer() {
       cam.yaw = yaw;
       grounded = true; wasGrounded = true; sprintT = 0; crouchT = 0;
       turnRate = 0; accelFwd = 0; anticipT = -1; buffer = 0; coyote = MOVE.coyote;
-      framingT = 0;
+      framingT = 0; aimT = 0; gunAimT = 0; sphereAimT = 0;
       if (root) { root.position.copy(position); root.rotation.y = bodyYaw; }
       cam.snap();
       return { x, z, y };
@@ -357,6 +434,7 @@ export function createPlayer() {
         speed: +Math.hypot(velocity.x, velocity.z).toFixed(2),
         state, grounded,
         sprint: +sprintT.toFixed(2),
+        aim: +aimT.toFixed(3),
         gesture: +(anim?.gesturePhase ?? 0).toFixed(2),
         cam: cam.snapshot(),
       };

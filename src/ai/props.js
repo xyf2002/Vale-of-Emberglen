@@ -93,7 +93,11 @@ function boulderGeometry(rng, noise, r) {
   const ph = rng.range(0, 10);
   for (let i = 0; i < p.count; i++) {
     let x = p.getX(i), y = p.getY(i), z = p.getZ(i);
-    const band = Math.round((y / r + ph) * 2.6) / 2.6 * r;
+    // `- ph` before the rescale: without it the phase that decorrelates the banding
+    // becomes a translation and lifts the whole boulder by 0.45*ph*r — see the long note
+    // in src/world/props.js, which had the identical bug. The origin stays grounded, so
+    // nothing in object space flags it; only the geometry bounding box does.
+    const band = (Math.round((y / r + ph) * 2.6) / 2.6 - ph) * r;
     y = y + (band - y) * 0.45;
     const d = 1 + 0.26 * noise.fbm(x * 2.1 + ph, z * 2.1 - ph, 3);
     p.setXYZ(i, x * d * sx, y * d * sy, z * d * sz);
