@@ -135,6 +135,10 @@ export function createRocks(ctx, T, rng) {
   const e = new THREE.Euler();
   // ballistics broadphase: a boulder is a sphere, sunk the same 0.30 the mesh is
   const bp = beginPropChannel('rocks');
+  // ground-side occlusion (see contact.js). Only stones big enough to read: a 16 cm
+  // pebble's contact patch is under a pixel past ten metres and all it would do is
+  // shimmer.
+  const decals = [];
   let count = 0;
   for (let i = 0; i < geos.length; i++) {
     const list = lists[i];
@@ -151,13 +155,14 @@ export function createRocks(ctx, T, rng) {
       // pebbles under 25 cm are not worth a trace entry -- they would triple the
       // collider count to stop nothing a player would ever notice
       if (p.s >= 0.25) bp.sphere(p.x, p.y - p.s * 0.30, p.z, p.s * 0.92, 'stone');
+      if (p.s >= 0.32) decals.push({ x: p.x, z: p.z, r: p.s * 1.32 + 0.14, dark: 0.50 });
     }
     mesh.instanceMatrix.needsUpdate = true;
     mesh.computeBoundingSphere();
     meshes.push(mesh);
     count += list.length;
   }
-  return { meshes, count, material: mat };
+  return { meshes, count, material: mat, decals };
 }
 
 /* ================================================================= RUINS ====== */

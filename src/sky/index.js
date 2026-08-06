@@ -13,6 +13,9 @@ import { ORDER } from '../engine/Game.js';
  *   getSunColor() -> THREE.Color
  *   setWeather(name, amount0to1)   'clear' | 'cloudy' | 'rain' | 'fog'
  *   sunLight -> THREE.DirectionalLight   (others may read for shadow config)
+ *   keyLights -> array of every shadow-casting key light. There is one today; a probe
+ *                that zeroes "the key" should iterate this rather than sunLight, so a
+ *                future cascade cannot silently leave part of the key burning.
  *
  * ADDITIONS (safe to use, additive only):
  *   getKeyDirection()   -> unit vector the shadow-casting key light comes from
@@ -440,23 +443,158 @@ const WEATHER = {
  * back. Noon loses 15% of its illumination on flat ground, low morning gains 22%, which
  * pulls the daylight ground/sky ratios toward the middle of the reference band instead
  * of out of either end of it.
+ *
+ * ROUND 13: 40 deg / ^0.62 — LOWER PEAK, FLATTER TOP, SAME MORNING SHOULDER.
+ * Two numbers shape this curve and they can be moved against each other. Dropping the
+ * peak alone drags the whole arc down including the morning shoulder, which is the one
+ * part that must NOT come down (the 18.4 deg ridge above). Dropping the peak and
+ * flattening the exponent together lowers the middle of the day while holding the
+ * shoulder where it is. Measured, per capture shot, old -> new:
+ *
+ *      overshoulder_meadow (t 0.29)   22.2 -> 23.7      (ridge clearance preserved)
+ *      creature_group      (t 0.34)   32.6 -> 30.6
+ *      creature_portrait   (t 0.63)   39.0 -> 34.6
+ *      vista_golden        (t 0.60)   42.7 -> 36.9
+ *      interaction_feed    (t 0.45)   46.2 -> 39.0
+ *
+ * A cast shadow is cot(elev) times its caster's height, so vista's 12 m trees go from
+ * 13.0 m of shadow to 16.0 m (+23%) and the feed shot's from 11.5 to 14.8 (+29%). The
+ * cost is paid on flat ground, where the key's Lambert term is sin(elev): -11% at
+ * vista, -13% at feed, -5% at creature_group, +6% at over-shoulder. That is the
+ * binding constraint on how far this can go, not aesthetics — the ground/sky ratio
+ * guardrail's floor is 0.63 and over-shoulder measured 0.65 the round before this one.
+ * `dayKey` saturates for y > 1/3 (19.5 deg), so none of these shots loses any key
+ * INTENSITY; the loss is purely the cosine on horizontal ground.
+ *
+ * NEGATIVE RESULT, so nobody re-derives it: the obvious "golden hour wants 15-25 deg"
+ * reading of the brief cannot be applied to the whole arc. 32 deg / ^0.45 puts every
+ * daylight shot in 21.9-31.4 deg, but costs 27-30% of the flat-ground key on the two
+ * widest shots, which is roughly a 0.10 drop in ground/sky ratio — straight through the
+ * floor of the band on over-shoulder and creature_group. The frustum, not the arc, is
+ * where the coverage was hiding.
+ *
+ * WHAT THIS COST, MEASURED, AND WHY IT IS FLAGGED RATHER THAN TUNED AWAY.
+ * measure.py on r13sky against r12, ground/sky ratio (band 0.63-0.96):
+ *
+ *     interaction_feed     0.78 -> 0.63     elev 46.2 -> 39.0   (-13% flat-ground key)
+ *     vista_golden         0.80 -> 0.72     elev 42.7 -> 36.9   (-11%)
+ *     creature_group       0.70 -> 0.61 **  elev 32.6 -> 30.6   (-5%)
+ *     overshoulder_meadow  0.65 -> 0.60 **  elev 22.2 -> 23.7   (+5%, i.e. MORE key)
+ *
+ * The two that broke the floor are the two the arc did not darken — over-shoulder's key
+ * went UP and its sky is unchanged to a tenth (176.0 -> 176.3), so its 8% darker ground
+ * is cast shadow and baked contact occlusion, not the sun's height. Round 13 had four
+ * agents darkening ground at once (normalBias here, applyContactShade in
+ * world/vegetation.js, the new player-contact-shadow and propContact meshes) and the
+ * ratio floor is where they collided. The arc is the wrong place to buy it back: on the
+ * two failing shots it is worth +5% and -5%, so raising it fixes neither.
  */
 const RISE_T = 0.205;
 const SET_T = 0.805;
 const DAY_HALF = (SET_T - RISE_T) * 0.5;      // 0.30
 const DAY_MID = (SET_T + RISE_T) * 0.5;       // 0.505
 const NIGHT_HALF = 0.5 - DAY_HALF;            // 0.20
-const MAX_ELEV = 48 * Math.PI / 180;
+const MAX_ELEV = 40 * Math.PI / 180;
 const MIN_ELEV = -38 * Math.PI / 180;
-const DAY_SHAPE = 0.9;
+const DAY_SHAPE = 0.62;
 
 /**
- * How far back the key light is parked from the shadow focus point. It has to clear
- * the deepest the ground can get in light space: for an ortho half-size S at sun
- * elevation e the ground spans +/- S/tan(e) metres of depth, which at S = 150 and the
- * 16 deg morning key is +/- 520 m. 620 keeps the whole box in front of the near plane.
+ * THE SHADOW BOX — and the round-13 measurement that says what actually sets its size.
+ *
+ * Geometry first. An ortho shadow box of half-size S covers +/-S across the sun azimuth
+ * but +/-S/sin(elev) ALONG it, the ground inside it spans +/-S/tan(elev) metres of DEPTH
+ * in light space, its texel is 2S/mapSize, and focusForCamera leads the camera by 0.45*S
+ * so it reaches 1.45*S down the view axis.
+ *
+ * The brief for this round was "the box is far too small for what the camera sees; the
+ * hillside trees the critic named sit at 250-330 m and the 140 m box reaches 203 m".
+ * That reasoning is correct and the conclusion is WRONG, which is worth writing down in
+ * full because it is a very convincing dead end.
+ *
+ * MEASURED (tools/_boxsweep.mjs, one staged frame, 4096 map, 100% key, box re-centred
+ * for each size, mean |shadows on - off| over the frame in units of 255):
+ *
+ *       S      reach   texel    vista_golden      creature_group
+ *      60 m     87 m   2.9 cm   0.904  (-29.2)    1.227  (-36.1)
+ *      90 m    131 m   4.4 cm   1.060  (-23.8)    1.255  (-36.4)
+ *     120 m    174 m   5.9 cm   1.130  (-21.9)    1.231  (-35.9)
+ *     170 m    247 m   8.3 cm   1.133  (-22.1)    1.414  (-33.4)
+ *     250 m    362 m  12.2 cm   1.106  (-21.8)    1.452  (-31.9)
+ *
+ * (the 250 m row comes from tools/_cascadesplit.mjs, a different session; everything
+ * else is one _boxsweep run per shot. Cross-session rows carry a percent or two of
+ * drift because other systems' meshes change between runs — compare within a row.)
+ *
+ * Reach stops paying at about 120 m of half-size and going to 250 m is FLAT-TO-NEGATIVE
+ * on both shots. Whatever is at 250-330 m is either not there or is so far inside the
+ * aerial-perspective fade (FogExp2 at 0.0021 puts 33% fog over a 300 m ray) that its
+ * shadow cannot move a pixel. Do not widen this box again expecting the hillside.
+ *
+ * WHAT DID PAY, and by more than any of the above: normalBias. Same 170 m box, same
+ * everything, sweeping only that number on creature_group:
+ *
+ *     normalBias 0.12   mean 1.414   darkest -33.4     <- what r11-r12 shipped
+ *     normalBias 0.06   mean 1.686   darkest -36.4
+ *     normalBias 0.03   mean 1.829   darkest -36.7
+ *     normalBias 0.00   mean 1.962   darkest -37.0
+ *
+ * normalBias is a world-space push ALONG THE SURFACE NORMAL, so it does not scale with
+ * anything — at 0.12 it walks the receiving surface 12 cm out from under its own
+ * occluder, and a Woolkin's contact shadow is 60 cm across. It was eating a fifth of the
+ * shadow's width from every side, on every prop, in every frame, no matter how many
+ * texels the map had. That is why a 45 m box at 4.4 cm/texel with normalBias 0.05
+ * out-measured a 60 m box at a FINER 2.9 cm with normalBias 0.12 by 34%.
+ *
+ * 0.06 is where this ships, and the two columns are why. The DARKEST PATCH — the number
+ * that tracks "is there a readable shadow under that creature" — is already saturated at
+ * 0.06: -36.4 against -37.0 at zero bias, i.e. 0.06 buys 84% of everything available and
+ * the remaining 0.6/255 of depth is not worth an acne risk. The MEAN keeps climbing all
+ * the way to zero, which is exactly the signature of diffuse prop self-shadow acne
+ * spreading across the frame: a probe that only knows "darker" scores acne and shadow
+ * identically. Going below 0.06 needs eyes on the frame, not this number.
+ *
+ * FOLLOW-UP, RESOLVED — 0.06 STAYS, and not for the acne reason. tools/_biasacne.mjs put
+ * the eyes on the frame: it renders one staged shot at 0.12 / 0.06 / 0.03 / 0.0 inside a
+ * single browser session (so the tree cannot shift underneath the comparison) and scores
+ * high-frequency speckle on the ground, which is what acne is and what a shadow edge is
+ * not. There IS NO ACNE at 0.03 or even at 0.0:
+ *
+ *     bias    meanLum   speckle(ground)      bias    meanLum   speckle(ground)
+ *     0.12     114.87       8.647            0.12     123.18      10.539
+ *     0.06     114.39       8.635            0.06     123.02      10.552
+ *     0.03     114.13       8.623            0.03     122.93      10.551
+ *     0.00     113.87       8.609            0.00     122.84      10.548
+ *       (overshoulder_meadow)                       (vista_golden)
+ *
+ * Speckle is FLAT — falling slightly on overshoulder, moving by 0.013 on vista. Acne
+ * would raise it monotonically. The crops are visually indistinguishable.
+ *
+ * So the acne worry was unfounded, and 0.06 still ships, because the real constraint is
+ * one this file cannot see from the inside: the whole 0.12 -> 0.0 sweep is worth 0.34/255
+ * of ground luminance on vista, and ground luminance is the numerator of the ground/sky
+ * `ratio` guardrail, which round 13 has ALREADY pushed under its 0.63 floor (creature_group
+ * 0.61, overshoulder 0.60) with three systems darkening ground at once. Dropping the bias
+ * buys a tenth of a luminance unit and spends it against the one band that is currently
+ * failing. Revisit only once ratio is back inside its band.
+ *
+ * DEAD END, MEASURED, DO NOT REBUILD IT: a two-light cascade. three has no CSM, but two
+ * directional lights on the same direction sharing the key's intensity compose into one
+ * (three's shadow lookup returns "fully lit" outside a light's own frustum, so a
+ * fragment inside both boxes loses 100% of the key and one inside only the wide box
+ * loses the wide light's share). It was built and measured: a 250 m box at 65% plus a 45 m box
+ * at 35% scored 1.005 / 1.498 against the single box's 1.106 / 1.452 — a wash — and once
+ * normalBias came down the single 170 m box scored 1.686 on creature_group, beating the
+ * best cascade configuration outright. The cascade was an elaborate workaround for a
+ * normal offset that was simply too big. It cost a second 2048 shadow pass. Deleted.
+ *
+ * KEY_DIST = 700 with near/far 20..1380. At S = 170 and the shallowest daylight key
+ * (23.7 deg, over-shoulder) the ground is +/-388 m deep in light space, i.e. 312 to
+ * 1088 along the light ray, comfortably inside. The old far = 1230 with the light at
+ * 620 was already tight and would have clipped a wider box, which is the failure the
+ * previous round's comment describes.
  */
-const KEY_DIST = 620;
+const KEY_DIST = 700;
+const SHADOW_FAR_S = 170;
 
 function sunElevation(t) {
   let u = t - DAY_MID;
@@ -879,9 +1017,9 @@ export function createSky() {
   /** snap the shadow camera to the light-space texel grid — kills shimmer */
   const _r = new THREE.Vector3(), _u = new THREE.Vector3(), _p = new THREE.Vector3();
   const _fwd = new THREE.Vector3();
-  function focusShadow(px, py, pz) {
-    const half = sun.shadow.camera.right;
-    const texel = (half * 2) / sun.shadow.mapSize.x;
+  function focusShadow(light, dist, px, py, pz) {
+    const half = light.shadow.camera.right;
+    const texel = (half * 2) / light.shadow.mapSize.x;
     _r.set(0, 1, 0).cross(keyDir);
     if (_r.lengthSq() < 1e-6) _r.set(1, 0, 0);
     _r.normalize();
@@ -890,10 +1028,10 @@ export function createSky() {
     const a = _p.dot(_r), b = _p.dot(_u);
     const da = a - Math.round(a / texel) * texel;
     const db = b - Math.round(b / texel) * texel;
-    sun.target.position.copy(_p).addScaledVector(_r, -da).addScaledVector(_u, -db);
-    sun.target.updateMatrixWorld();
-    sun.position.copy(sun.target.position).addScaledVector(keyDir, KEY_DIST);
-    sun.updateMatrixWorld();
+    light.target.position.copy(_p).addScaledVector(_r, -da).addScaledVector(_u, -db);
+    light.target.updateMatrixWorld();
+    light.position.copy(light.target.position).addScaledVector(keyDir, dist);
+    light.updateMatrixWorld();
   }
 
   /**
@@ -906,13 +1044,14 @@ export function createSky() {
    * always less than half its half-size), so their own shadow is never lost.
    */
   function focusForCamera(cam, px, py, pz) {
-    if (!cam) { focusShadow(px, py, pz); return; }
+    if (!cam) { focusShadow(sun, KEY_DIST, px, py, pz); return; }
     _fwd.set(0, 0, -1).applyQuaternion(cam.quaternion);
     _fwd.y = 0;
     if (_fwd.lengthSq() < 1e-8) _fwd.set(0, 0, -1);
     _fwd.normalize();
     const ahead = sun.shadow.camera.right * 0.45;
-    focusShadow(cam.position.x + _fwd.x * ahead, py, cam.position.z + _fwd.z * ahead);
+    focusShadow(sun, KEY_DIST,
+      cam.position.x + _fwd.x * ahead, py, cam.position.z + _fwd.z * ahead);
   }
 
   function refreshEnv(force = false) {
@@ -940,6 +1079,7 @@ export function createSky() {
     order: ORDER.SKY,
     get timeOfDay() { return state.timeOfDay; },
     get sunLight() { return sun; },
+    get keyLights() { return [sun]; },
     get sunElevationDeg() { return Math.asin(Math.max(-1, Math.min(1, sunDir.y))) * 180 / Math.PI; },
     get isNight() { return sunDir.y < -0.02; },
 
@@ -978,20 +1118,33 @@ export function createSky() {
       // 7 cm, which cost nothing visible, because at 7 cm the map was resolving
       // individual grass tufts inside a frame that had no shadows in it at all.
       // ------------------------------------------------------------------
-      const s = c.quality.tier === 'high' ? 150 : 140;
+      //
+      // ROUND 13: 140 -> 170 m, and that is as far as it goes. The reasoning above is
+      // sound and its conclusion is not: a sweep of the half-size at fixed map size
+      // (tools/_boxsweep.mjs, table in THE SHADOW BOX above) shows reach stops paying
+      // at ~120 m and 250 m is flat-to-negative on both wide shots. 170 m keeps a
+      // little margin past the plateau at 8.3 cm/texel. The number that was actually
+      // suppressing shadow was normalBias, not the frustum.
+      const s = c.quality.tier === 'high' ? SHADOW_FAR_S + 10 : SHADOW_FAR_S;
       sun.shadow.mapSize.set(m, m);
       sun.shadow.camera.left = -s; sun.shadow.camera.right = s;
       sun.shadow.camera.top = s; sun.shadow.camera.bottom = -s;
-      sun.shadow.camera.near = 10; sun.shadow.camera.far = KEY_DIST * 2 - 10;
+      sun.shadow.camera.near = 20; sun.shadow.camera.far = KEY_DIST * 2 - 20;
       // shadow.bias is in NORMALISED depth, so it scales with (far - near): the old
-      // -0.00035 over a 519 m range was 0.18 m of depth push. Held at ~0.10 m here.
-      sun.shadow.bias = -0.00009;
+      // -0.00035 over a 519 m range was 0.18 m of depth push. Held at ~0.11 m here
+      // over the 1360 m range this box now spans.
+      sun.shadow.bias = -0.00008;
       // normalBias is a CONSTANT world-space push along the surface normal, so the
       // depth it actually buys is normalBias * sin(elevation) -- 4 cm at the 16 deg
       // morning key. It can never be the terrain's acne fix (the terrain needs a
-      // SLOPE-SCALED offset; see ground.customDepthMaterial in world/index.js). Kept
-      // here only to stop small props shadowing their own facing side.
-      sun.shadow.normalBias = 0.12;
+      // SLOPE-SCALED offset; see ground.customDepthMaterial in world/index.js).
+      //
+      // 0.12 -> 0.06 IS THE SINGLE BIGGEST SHADOW CHANGE IN THIS ROUND. Read the
+      // normalBias table in THE SHADOW BOX above before touching it: at 0.12 this one
+      // number was walking every receiving surface 12 cm out from under its own
+      // occluder and erasing a fifth of the width of every contact shadow in the game,
+      // which no amount of frustum or map size could compensate for.
+      sun.shadow.normalBias = 0.06;
       sun.shadow.camera.updateProjectionMatrix();
       c.scene.add(sun, sun.target);
 

@@ -2,3 +2,4 @@ node_modules/
 dist/
 captures/
 .vite/
+__pycache__/

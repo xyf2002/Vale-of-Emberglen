@@ -227,23 +227,51 @@ export function createCreatures() {
         updateRig(cr, dt, cam ? _cam : null);
       }
 
-      // ---- contact shadows (reference observation #9) -------------------------
+      // ---- contact occlusion (reference observation #9) -----------------------
+      // Not one decal: a stack of horizontal slabs through the grass canopy. See the
+      // long note on CONTACT_LAYERS in materials.js for why a ground-plane decal is
+      // invisible in a meadow — it is measured, not a preference.
       if (shadows) {
+        const layers = shadows.userData.layers;
         const cap = shadows.instanceMatrix.count;
+        const col = shadows.instanceColor;
         let n = 0;
         for (const cr of list) {
-          if (n >= cap) break;
+          if (n + layers.length > cap) break;
+          const size = cr.def.size ?? 1;
           // tight: roughly the footprint, not the body width. Squashed on the
           // depth axis so it reads as an ellipse under the feet at a low camera.
-          const r = (cr.def.size ?? 1) * (cr.def.gait === 'quad' ? 0.72 : 0.48);
-          _pv.set(cr.position.x, cr._groundY + 0.02, cr.position.z);
+          const r = size * (cr.def.gait === 'quad' ? 0.72 : 0.48);
+
+          // How far the RENDERED body has left the ground. cr.position.y is pinned to
+          // the terrain every frame, so the only place a hop exists is the rig's bodyY
+          // (see anim.js: hop peaks at 0.17 of body size, startle pops 0.10). Reading
+          // the pose rather than the transform is what makes a startled creature
+          // visibly lift off its own shadow, which is most of the value of this term.
+          const lift = (cr._pose?.bodyY ?? 0) * size;
+          const air = clamp(lift / (0.19 * size), 0, 1);
+          // ...and a creature that squats (bodyY goes negative in crouch/sleep) presses
+          // itself into the grass instead.
+          const squash = clamp(-lift / (0.15 * size), 0, 1);
+
+          const spread = 1 + air * 0.55;
+          const fade = (1 - air * 0.78) * (1 + squash * 0.18);
+
           _q.setFromAxisAngle(UP, cr.bodyYaw);
-          _sc.set(r * 2.0, 1, r * 1.65);
-          _m.compose(_pv, _q, _sc);
-          shadows.setMatrixAt(n++, _m);
+          for (const L of layers) {
+            const rr = r * L.r * spread;
+            _pv.set(cr.position.x, cr._groundY + L.y * size, cr.position.z);
+            _sc.set(rr * 2.0, 1, rr * 1.65);
+            _m.compose(_pv, _q, _sc);
+            shadows.setMatrixAt(n, _m);
+            const s = L.s * fade;
+            col.setXYZ(n, s, s, s);
+            n++;
+          }
         }
         shadows.count = n;
         shadows.instanceMatrix.needsUpdate = true;
+        col.needsUpdate = true;
       }
     },
 

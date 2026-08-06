@@ -39,6 +39,24 @@
  *
  * Every one of these is read from state the interaction system already maintains. This
  * file never writes to it.
+ *
+ * VERIFIED r12 — the `wary` term does apply and does bite, but read the whole table before
+ * assuming a spammer is punished. Chances for a wild creature (trust 0.00):
+ *
+ *   fresh, calm, 0 breakouts                      5.7%
+ *   immediate re-throw, 1 breakout, tired=1       18.5%   <- winded + startled outweigh wary
+ *   immediate re-throw, 2 breakouts, tired=1      12.7%
+ *   immediate re-throw, 3 breakouts, tired=1      12.7%   (waryCap = 2)
+ *   once the winding has worn off, 1 breakout      7.5%
+ *   once the winding has worn off, 2 breakouts     4.9%
+ *
+ * So `wary` converges the SPAM line to about 12.7% per throw rather than to nothing: the
+ * +0.14 tired and +0.10 startled bonuses are together larger than the −0.12 the wary cap
+ * allows. That is arguably the intended "you nearly had it, follow up now" reward, and it
+ * is the same shape as feed-then-throw-while-it-eats — so it was left alone. But six
+ * spheres thrown back to back at a wild animal is still roughly a coin flip, which is
+ * worth a deliberate decision rather than an accident. Raising `waryCap`, or decaying
+ * `tired` per breakout, are the two knobs; neither was touched in r12.
  */
 
 export const CATCH = {

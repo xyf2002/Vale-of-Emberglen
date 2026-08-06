@@ -139,8 +139,14 @@ export function createFx(ctx, rng) {
         color, size, life, 0.6);
     },
 
-    /** motes torn off the creature and dragged into the sphere mouth */
-    swirl(from, to, radius, color = 0xffeec4) {
+    /**
+     * Motes torn off the creature and dragged into the sphere mouth.
+     * `sizeK` is a legibility compensator, not a style knob: an 0.05 m additive mote is
+     * roughly one pixel at 26 m and additive-over-sunlit-grass at one pixel is invisible
+     * (same reason the arc and the ground markers here are opaque rather than additive).
+     * The caller passes camera range, so the vortex costs nothing extra up close.
+     */
+    swirl(from, to, radius, color = 0xffeec4, sizeK = 1) {
       const th = rng.next() * Math.PI * 2;
       const r = radius * (0.55 + rng.next() * 0.75);
       const x = from.x + Math.cos(th) * r;
@@ -148,7 +154,7 @@ export function createFx(ctx, rng) {
       const z = from.z + Math.sin(th) * r;
       // tangential kick so the pull-in reads as a vortex, not a straight suck
       spark(x, y, z, -Math.sin(th) * 2.4, 0.5, Math.cos(th) * 2.4,
-        color, 0.048 + rng.next() * 0.03, 0.42, 0, 26, to.x, to.y, to.z);
+        color, (0.048 + rng.next() * 0.03) * sizeK, 0.42, 0, 26, to.x, to.y, to.z);
     },
 
     ring(pos, { r0 = 0.2, r1 = 1.6, dur = 0.55, color = 0xffe0a8 } = {}) {

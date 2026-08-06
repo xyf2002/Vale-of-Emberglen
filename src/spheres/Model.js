@@ -154,11 +154,14 @@ export function createSphereFactory(rng) {
           core.material.opacity = k * 0.85;
           core.scale.setScalar(0.9 + k * 0.35);
         },
-        setBeam(on, len, k) {
+        /** `w` widens the cone to hold apparent width on a long throw — see the
+         *  stand-off note in index.js onHit(). 1 at the authored range. */
+        setBeam(on, len, k, w = 1) {
           beam.visible = on;
           if (!on) return;
-          beam.scale.set(0.55 + k * 0.75, Math.max(0.001, len), 0.55 + k * 0.75);
-          beam.material.opacity = k;
+          const r = (0.55 + k * 0.75) * w;
+          beam.scale.set(r, Math.max(0.001, len), r);
+          beam.material.opacity = Math.min(1, k * (0.85 + w * 0.15));
         },
         dispose() {
           button.material.dispose(); core.material.dispose(); beam.material.dispose();

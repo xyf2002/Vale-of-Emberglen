@@ -210,6 +210,42 @@ function mkCanvas(w, h) {
  * Fur fuzz. Reference observation #4: "fine flocked noise". This is a near-white
  * multiplier map, tiled small, that breaks the plastic evenness of a smooth surface.
  * Deterministic: driven by the passed rng.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THE CRITIC STILL SEES "ZERO SURFACE MICRODETAIL" DESPITE THIS EXISTING.
+ * Measured in r13, recorded here so the next agent does not start by turning
+ * `contrast` up, which is not the problem.
+ *
+ * The r12 blind critic on the creature portrait: "a pure smooth shading gradient with
+ * zero surface microdetail — no fur fibre, no albedo break-up, no roughness variation
+ * across the wool", against a real plate that "shows short-fur shading and fabric-scale
+ * noise that changes with curvature".
+ *
+ * The map is applied and its contrast is not low (woolkin runs 0.30). It is being
+ * MINIFIED AWAY. Arithmetic for the portrait shot, which is the shot the critic saw:
+ *
+ *   canvas                 384 px
+ *   species.fur.rep        [10, 9] — ten tiles across the body
+ *   creature on screen     ~350 px of a 720 px frame
+ *   => one tile            ~35 screen px, i.e. 11x minification, mip level ~3.4
+ *   => a 0.7-2.2 px stroke authored in the canvas lands at 0.06-0.2 screen px
+ *
+ * Trilinear filtering does exactly what it is supposed to do and averages every streak
+ * back to flat white. The tufts (radius 0.03-0.09 of 384 = 11-35 canvas px) survive at
+ * 1-3 screen px and are the only reason the wool is not perfectly smooth.
+ *
+ * So the energy has to move DOWN in spatial frequency, not up in contrast: the reference
+ * asks for "fabric-scale" noise, and fabric scale on a 90 cm creature filling the frame
+ * is 5-15 screen px, not sub-pixel. Either drop `rep` and lengthen `streak` so the
+ * authored feature size survives mip 3, or drive the break-up from a shader-side
+ * function of curvature/vBodyY, which has no mip chain to be averaged by at all.
+ *
+ * NOT ATTEMPTED IN r13, deliberately, and this is the constraint to check first:
+ * creature_portrait measured edge 10.24 against a two-sided 5.0-10.0 band. It is already
+ * OVER the top. Adding mid-frequency albedo break-up moves `edge` up. Whoever does this
+ * has to buy the headroom somewhere else first (the portrait's other high-contrast
+ * feature is the drawn face atlas) or it will trade one guardrail failure for another.
+ * ---------------------------------------------------------------------------
  */
 export function furTexture(rng, { size = 256, contrast = 0.11, streak = 0.55, tufts = 0 } = {}) {
   const c = mkCanvas(size, size);

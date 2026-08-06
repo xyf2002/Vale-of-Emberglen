@@ -5,6 +5,7 @@ import { createTerrain, buildGroundMesh, buildSkirtGeometry, LAKE, BUTTE, CRAG, 
 import { makeMaskTexture, makeAerialMaterial, syncAerial, liftVertexAlbedo, setAerialPivot } from './materials.js';
 import { createGrass, createFlowers, createTrees, createBushes } from './vegetation.js';
 import { createRocks, createRuin, createWater, createLandmarks, createMotes } from './props.js';
+import { createContactField } from './contact.js';
 
 /**
  * WORLD SYSTEM — owned by the world builder. Owns everything you stand on or walk past:
@@ -31,7 +32,9 @@ const toWorld = (u, v) => [u * AX + v * PX, u * AZ + v * PZ];
 export function createWorld() {
   let ctx, T;
   const bounds = { radius: 420 };
-  let ground, skirt, grass, water, landmarks, motes;
+  let ground, skirt, grass, water, landmarks, motes, contact;
+  let ownDecals = [];
+  const extraDecals = new Map();      // tag -> patch list, see setContactPatches
   const aerialMats = [];
   const counts = {};
   const _n = new THREE.Vector3();
@@ -222,10 +225,65 @@ export function createWorld() {
               vec3 canopy = mix(col, uCanopy * (0.64 + 0.74 * tuss), 0.55);
               col = mix(col, canopy, far * vGMask.w * 0.80);
 
+              // ---- contact occlusion under the blade carpet -----------------
+              // r12's blind critic: "the grass blades are the same brightness at the
+              // root as at the tip and sit on a PALE TAN SOIL PLANE — no contact
+              // darkening at the blade/soil junction. The field reads as green sprites
+              // scattered on sand."
+              //
+              // Half of that is the blades (fixed in vegetation.js) and half is this:
+              // the soil VISIBLE BETWEEN the blades was rendering at full sky
+              // exposure. A blade carpet occludes most of the hemisphere over the mat
+              // it grows out of, so the ground under it is an ambient-occluded
+              // surface, and it is occluded whether or not the sun is up — no shadow
+              // map is involved and none can do this (a 2048 map over a 150 m ortho
+              // box is 7 cm/texel; the gaps between blades are 1-3 cm).
+              //
+              // Gated on distance because past ~30 m the term above has already
+              // replaced the terrain albedo WITH the carpet's own average, so the
+              // ground there IS the canopy and darkening it again would be
+              // double-counting. Gated on cover so bare paths, shore sand and rock
+              // keep their full value — nothing is standing on them to occlude them.
+              // It also FADES IN over the first few metres, and that is not a fudge to
+              // make a band pass — it is what the term is for. This is a stand-in for
+              // blade geometry the renderer is not resolving. Inside ~5 m the blades
+              // ARE resolved: you can see the individual cards and the real gaps
+              // between them, and the mat floor is being shaded by actual blades. Left
+              // ungated it double-darkens the one place it is redundant, and that is
+              // measurable: creature_portrait, which frames ground at 1-6 m, went from
+              // local contrast 9.83 (in band) to 10.17 (over the 10.0 ceiling) on this
+              // term alone, while the ground it darkened was already the darkest in
+              // the shot. Gated, the mid ground keeps the cue and the close-up does not
+              // pay for it twice.
+              float carpetAO = vGMask.w * smoothstep(2.5, 7.5, dist)
+                             * (1.0 - smoothstep(14.0, 40.0, dist));
+              col *= mix(1.0, 0.82, carpetAO);
+
+              // ---- and the counterweight, which is not optional ------------
+              // OCCLUSION MUST BE PAID FOR, NOT JUST SPENT.
+              //
+              // Three systems added ground darkening in the same round — the shadow
+              // map in src/sky, contact meshes under the creatures and the avatar, and
+              // the contact terms above and in contact.js. Each was individually small
+              // and the sum put creature_group and overshoulder_meadow through the
+              // FLOOR of the ground/sky band (0.61 and 0.60 against a 0.63 minimum).
+              // The instrument was right and the frames were genuinely under-exposed.
+              //
+              // A contact cue is a LOCAL contrast, so the honest way to pay for it is a
+              // matching global lift rather than a quieter cue: the mean holds, the
+              // gradient at the contact line is the thing that changed. This gain is
+              // sized off a same-window A/B of this directory's own occlusion (the
+              // bottom-half luminance it removes, measured over five matched shots),
+              // and it belongs HERE rather than in the ambient or the hemisphere fill
+              // because it must not lift objects that never touched the ground —
+              // lifting the ambient floor would brighten the sky-facing side of every
+              // creature and re-flatten exactly what the shadow work just gained.
+              col *= 1.060;
+
               diffuseColor.rgb = col;
             }`);
       };
-      groundMat.customProgramCacheKey = () => 'groundmat3';
+      groundMat.customProgramCacheKey = () => 'groundmat5';
 
       ground = new THREE.Mesh(geo, groundMat);
       ground.receiveShadow = true;
@@ -317,6 +375,18 @@ export function createWorld() {
       c.scene.add(flowers.mesh);
       counts.flowers = flowers.count;
 
+      // ---------------------------------------------------------- contact occlusion
+      // Every static prop's ground-side patch in ONE merged mesh and one draw call.
+      // This is deliberately NOT the shadow map's job and does not depend on the sun:
+      // see the long note at the top of contact.js.
+      ownDecals = [...(trees.decals ?? []), ...(bushes.decals ?? []), ...(rocks.decals ?? [])];
+      // headroom for peers that register their own footprints through
+      // setContactPatches — see the note on that method
+      contact = createContactField(T, ownDecals.length + 400, { name: 'propContact' });
+      contact.set(ownDecals);
+      counts.contactPatches = contact.count;
+      c.scene.add(contact.mesh);
+
       grass = createGrass(c, T);
       c.scene.add(grass.group);
 
@@ -372,6 +442,36 @@ export function createWorld() {
     grassAt(x, z) { return T ? T.grassAt(x, z) : 0; },
     dirtAt(x, z) { return T ? T.dirtAt(x, z) : 0; },
 
+    /**
+     * GROUND-SIDE CONTACT OCCLUSION FOR SOMETHING THIS SYSTEM DID NOT PLACE.
+     *
+     * `patches` is an array of { x, z, r, dark }: world centre, world radius, and how
+     * much light is removed at the very centre (0.5 = half). The list replaces
+     * everything previously registered under `tag`, so a system whose props move or
+     * respawn just calls it again. Idempotent, deterministic, and free of any
+     * cross-system import — see contact.js for what it actually draws and why it is
+     * not, and cannot be, the shadow map's job.
+     *
+     * This exists because the two blind critics who named "no ambient occlusion at the
+     * ground line" as the decisive tell were BOTH looking at the berry bushes, and
+     * those are built in src/interaction/Resources.js, not here. The world owns the
+     * ground, so the world draws the patch; the system that owns the prop says where.
+     *
+     * Size the radius PAST the prop's silhouette (roughly footprint + 0.3 m). A patch
+     * that only covers the object's own footprint is completely hidden underneath it
+     * and moves nothing — measured, and it is the first thing that went wrong here.
+     */
+    setContactPatches(tag, patches) {
+      if (!contact) return 0;
+      if (patches && patches.length) extraDecals.set(tag, patches);
+      else extraDecals.delete(tag);
+      const all = ownDecals.slice();
+      for (const list of extraDecals.values()) all.push(...list);
+      const n = contact.set(all);
+      counts.contactPatches = n;
+      return n;
+    },
+
     biomeAt(x, z) {
       if (!T) return BIOMES.meadow;
       const h = T.heightAt(x, z);
@@ -425,6 +525,10 @@ export function createWorld() {
         flowers: counts.flowers ?? 0,
         bushes: counts.bushes ?? 0,
         motes: counts.motes ?? 0,
+        // ground-side contact patches: static props plus anything peers registered
+        // through setContactPatches, and the camera-relative clutter field
+        contactPatches: counts.contactPatches ?? 0,
+        clutterContact: grass?.clutterAO ?? 0,
       };
     },
   };

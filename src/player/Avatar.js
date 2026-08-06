@@ -144,7 +144,36 @@ function roundedBox(w, h, d, r, seg = 4) {
 
 /* ------------------------------------------------------------------ material */
 
-function mat(color, rough = 0.82, opts = {}) {
+/**
+ * three's own line out of <lights_fragment_begin>. Matched loosely enough to survive
+ * whitespace churn, strictly enough that a signature change fails visibly instead of
+ * silently leaving the acne in place. (Same trick as the creature fur shader — the two
+ * systems own separate directories and must not import each other, so it is copied.)
+ */
+const DIR_SHADOW_LINE = /directLight\.color \*= \( directLight\.visible && receiveShadow \) \? getShadow\( directionalShadowMap\[ i \],([\s\S]*?)directionalLightShadow\.shadowBias,([\s\S]*?)\) : 1\.0;/;
+
+/**
+ * @param shadowBias  normalised-depth push on the avatar's own shadow lookup, ~0.5 m.
+ *
+ * WHY THE AVATAR RECEIVES SHADOW AT ALL, AND WHY IT NEEDS ITS OWN BIAS.
+ *
+ * Until r13 every avatar mesh was `castShadow = true; receiveShadow = false`, so the
+ * character was lit identically standing in open sun and standing under a tree — which
+ * is another way of saying the character was not in the scene, it was composited over
+ * it. The r12 blind critic named "nothing is grounded" as the single biggest gap and
+ * this is part of it: a figure that never darkens as it walks into shade cannot read as
+ * being in the same space as the shade.
+ *
+ * Turning the flag on naively does not work, for the reason recorded in
+ * src/creatures/materials.js: the shadow map is ~7 cm/texel and the PCF kernel spans
+ * ~22 cm, so on a limb 12 cm thick roughly half the taps land behind the surface no
+ * matter which way it faces. The result is not a shadow, it is a uniform ~0.5 on the key
+ * everywhere, i.e. a flat character. The avatar is worse off than a Woolkin here because
+ * it is assembled from a dozen small convex parts with gaps between them. So the
+ * directional lookup gets a much larger depth bias: the avatar still darkens under a
+ * tree or a hillside, it just stops shadowing its own sleeve.
+ */
+function mat(color, rough = 0.82, opts = {}, { shadowBias = -0.00042 } = {}) {
   const m = new THREE.MeshStandardMaterial({
     color, roughness: rough, metalness: 0, ...opts,
   });
@@ -154,13 +183,26 @@ function mat(color, rough = 0.82, opts = {}) {
     color: { value: new THREE.Color(1.0, 0.86, 0.66) },
     strength: { value: 0.22 },
   };
+  m.userData.uShadowBias = { value: shadowBias };
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uRimColor = m.userData.rim.color;
     sh.uniforms.uRimStrength = m.userData.rim.strength;
-    sh.fragmentShader = 'uniform vec3 uRimColor;\nuniform float uRimStrength;\n' + sh.fragmentShader;
-    sh.fragmentShader = sh.fragmentShader.replace(
-      '#include <opaque_fragment>',
-      `{
+    sh.uniforms.uShadowBias = m.userData.uShadowBias;
+
+    // onBeforeCompile hands us the shader BEFORE #include resolution, so to touch a line
+    // inside a stock chunk we have to expand that chunk ourselves.
+    const litBegin = THREE.ShaderChunk.lights_fragment_begin.replace(DIR_SHADOW_LINE,
+      'directLight.color *= ( directLight.visible && receiveShadow ) ? getShadow( directionalShadowMap[ i ],$1uShadowBias,$2) : 1.0;');
+    if (!/uShadowBias/.test(litBegin)) {
+      console.warn('[player] avatar shader: could not re-bias the directional shadow lookup; '
+        + 'the avatar will self-shadow to a flat half-light.');
+    }
+
+    sh.fragmentShader = 'uniform vec3 uRimColor;\nuniform float uRimStrength;\nuniform float uShadowBias;\n' + sh.fragmentShader;
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <lights_fragment_begin>', litBegin)
+      .replace('#include <opaque_fragment>',
+        `{
          float rf = 1.0 - clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0);
          outgoingLight += uRimColor * pow(rf, 3.5) * uRimStrength;
        }
@@ -194,7 +236,10 @@ export function buildAvatar(rng) {
   const add = (parent, geo, material) => {
     const m = new THREE.Mesh(geo, material);
     m.castShadow = true;
-    m.receiveShadow = false;
+    // r13: was false. See the shadow-bias note on mat() above — the avatar now darkens
+    // when it walks into tree or hillside shade instead of being lit identically
+    // everywhere, which was half of why it read as composited over the meadow.
+    m.receiveShadow = true;
     m.frustumCulled = false;
     parent.add(m);
     return m;

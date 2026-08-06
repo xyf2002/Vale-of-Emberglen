@@ -68,8 +68,16 @@ export function furMaterial({
   ambFloor = 0.30,         // sky light a fully downward-facing surface keeps
   bounce = 0.42,           // fraction of the blocked sky light returned as ground bounce
   bounceColor = 0xc9ad74,  // dry-grass bounce, warm and desaturated
-  groundAO = 0.42,         // occlusion at the very bottom of the creature
-  groundAOh = 0.20,        // ...falling off over this much of its normalised height
+  // Ground-line occlusion. r13: raised from 0.42/0.20. A creature standing in a 0.30-
+  // 0.60 m carpet has its whole lower third inside the canopy, not just its toes, and
+  // 0.20 of normalised height on a Woolkin is about 18 cm — the ramp finished below the
+  // grass line, so from any playable camera the visible bottom of the body was as bright
+  // as its back. That is half of "it sits on top of the picture"; the other half is the
+  // ground itself, handled by CONTACT_LAYERS below. Measured on creature_portrait: this
+  // pair is what darkens the wool where the blades cross it.
+  groundAO = 0.55,         // occlusion at the very bottom of the creature
+  groundAOh = 0.34,        // ...falling off over this much of its normalised height
+  groundAOkey = 0.80,      // ...and how much of it also lands on the sun. 0 = ambient only
   shadowBias = -0.00048,   // ~0.6 m of depth push: enough to clear a creature's own hull
 } = {}) {
   const mat = new THREE.MeshStandardMaterial({
@@ -95,6 +103,7 @@ export function furMaterial({
     uBounceColor: { value: new THREE.Color(bounceColor) },
     uGroundAO: { value: groundAO },
     uGroundAOh: { value: groundAOh },
+    uGroundAOkey: { value: groundAOkey },
     uShadowBias: { value: shadowBias },
   };
 
@@ -126,7 +135,8 @@ export function furMaterial({
         uniform float uRim; uniform vec3 uRimColor;
         uniform float uFill; uniform float uWrap; uniform float uFuzz; uniform float uSheen;
         uniform float uKey; uniform float uAmbFloor; uniform float uBounce; uniform vec3 uBounceColor;
-        uniform float uGroundAO; uniform float uGroundAOh; uniform float uShadowBias;
+        uniform float uGroundAO; uniform float uGroundAOh; uniform float uGroundAOkey;
+        uniform float uShadowBias;
         varying float vBodyY;`)
       .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>
         material.roughness = 1.0;
@@ -147,7 +157,24 @@ export function furMaterial({
           irradiance += lost * uBounce * uBounceColor;
         }`)
       .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
-        reflectedLight.directDiffuse *= uKey;
+        // The ground line occludes the KEY too, not just the ambient.
+        //
+        // MEASURED, r13: raising uGroundAO from 0.42 to 0.55 moved the rendered bottom of
+        // a Woolkin by almost nothing, and the reason is in the block above — gao was
+        // applied to iblIrradiance and irradiance only. Since the fur shader started
+        // multiplying the key by uKey (2.05) to stop the creature being an ambient-lit
+        // ball, the ambient is no longer the dominant term, so occluding only the ambient
+        // occludes a minority share of the pixel. A creature standing in a 0.45 m carpet
+        // has its lower body shaded from the sun by the blades, so the same ramp belongs
+        // on the direct term. Held slightly weaker (0.80) than the ambient occlusion: a
+        // blade carpet is gappy, and crushing the key to zero at the waterline reads as
+        // a creature dipped in ink rather than one standing in grass. uGroundAOkey is a
+        // live uniform so tools/_groundprobe2.mjs can put the material back to its
+        // pre-r13 ambient-only behaviour and attribute the guardrail movement.
+        {
+          float gaoD = 1.0 - uGroundAO * uGroundAOkey * ( 1.0 - smoothstep( 0.0, uGroundAOh, vBodyY ) );
+          reflectedLight.directDiffuse *= uKey * gaoD;
+        }
         #if ( NUM_DIR_LIGHTS > 0 )
         {
           vec3 Nv = normalize( normal );
@@ -214,7 +241,11 @@ function contactDecal() {
   // blue is attenuated least, so the shaded ground shifts toward the sky's hue exactly
   // as reference #9 describes. This is a *darkening of the ground beneath*, which is
   // what a multiply is — never an opaque painted ellipse.
-  const CORE = [0.35, 0.385, 0.475];
+  //
+  // Round 13: lightened from [0.35,0.385,0.475]. One decal used to carry the whole
+  // contact term; there are now CONTACT_LAYERS of them stacked through the grass
+  // canopy, and multiply blending compounds. See CONTACT_LAYERS for the arithmetic.
+  const CORE = [0.46, 0.495, 0.585];
   const sstep = (e0, e1, x) => {
     const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
     return t * t * (3 - 2 * t);
@@ -251,31 +282,67 @@ function contactDecal() {
 }
 
 /**
- * Shared multiply-blended contact-shadow decal pool.
+ * THE CONTACT TERM IS A STACK OF SLABS, NOT A DECAL. Read this before flattening it.
+ *
+ * A single decal on the ground plane is the obvious implementation and it does not work
+ * in a meadow, which is measurable rather than arguable. Two independent measurements:
+ *
+ *   - depthTest off vs on, one flat decal: 30405 covered pixels became 4224. 86% of a
+ *     ground-plane decal fails the depth test against blades standing in front of it.
+ *   - r13 `tools/_groundprobe2.mjs`, which A/Bs the grounding meshes themselves rather
+ *     than the shadow map: the flat decal covered 0.147% of creature_group and 1.398%
+ *     of creature_portrait, and the diff image is not an ellipse — it is a row of
+ *     blade-shaped slivers, the gaps *between* the grass, at the bottom of the subject.
+ *
+ * The reason is structural. The meadow carpet is 0.30-0.60 m tall and the creature is
+ * standing IN it, so from any playable camera the pixels around a creature's base are
+ * grass, not ground. Darkening the ground plane darkens something nobody can see.
+ * Lifting the one decal higher does not fix it either: it detaches from the feet long
+ * before it clears the canopy.
+ *
+ * So the occlusion is sliced: CONTACT_LAYERS horizontal discs from the soil up through
+ * the canopy, shrinking and weakening with height. A blade whose visible pixel sits at
+ * 0.25 m gets darkened by the discs the view ray crossed above it; a bare patch of soil
+ * gets darkened by all of them. It is the same volume a real ambient occlusion term
+ * would describe, integrated the only way a forward renderer with no readable depth
+ * buffer can integrate it. One draw call, `max * CONTACT_LAYERS.length` instances.
+ *
+ * Multiply blending COMPOUNDS, so the stack has to be budgeted. With CORE red = 0.46
+ * each layer contributes `1 - 0.54 * strength`, and the four below multiply to 0.29 at
+ * the exact centre (which is under the belly, where the body hides it) and 0.54 for the
+ * ground layer alone. Raising any strength is a multiplicative change, not an additive
+ * one — check the product before touching them.
+ *
+ * y is in creature-size units (a 1 m creature stands in ~0.45 m of grass).
+ */
+export const CONTACT_LAYERS = [
+  { y: 0.020, r: 1.20, s: 0.95 },   // the ground itself
+  { y: 0.140, r: 1.10, s: 0.55 },   // blade bases
+  { y: 0.290, r: 0.96, s: 0.38 },   // mid canopy
+  { y: 0.460, r: 0.76, s: 0.26 },   // tips, right at the creature's waterline
+];
+
+/**
+ * Shared multiply-blended contact-occlusion pool.
  *
  * Per-instance strength rides in instanceColor.r: 1 = full contact shadow, 0 = gone.
  * A plain multiply cannot lighten, so the shader lerps the sampled multiplier back
- * toward white instead — that is what would let a hopping creature's shadow soften and
- * spread as it leaves the ground rather than sliding around underneath it. NOTE: the
- * creature system (src/creatures/index.js) does not currently drive that channel, so
- * every shadow is presently at full strength; the mechanism costs nothing when unused.
+ * toward white instead. That is what carries both the per-layer weight above and the
+ * air-gap fade — a creature that hops visibly leaves its own occlusion behind instead
+ * of dragging a sticker around under itself.
  *
  * @param _legacy  ignored. The caller still builds procgen.js's sRGB-authored texture,
  *                 which is four times darker than it reads as (see contactDecal), so
  *                 the pool authors its own. Kept in the signature because the creature
  *                 system that calls this is owned elsewhere.
+ * @param max      creatures, not instances. Capacity is max * CONTACT_LAYERS.length.
  */
 export function makeContactShadows(_legacy, max = 48) {
   const geo = new THREE.PlaneGeometry(1, 1);
   geo.rotateX(-Math.PI / 2);
-  // MEASURED: the creature system parks this decal at heightAt(x,z) + 0.02 m, and the
-  // meadow's blade carpet is 0.30-0.60 m tall, so from a gameplay camera 86% of the
-  // decal's pixels fail the depth test against grass standing in front of them (diffed
-  // two captures, one with depthTest off: 30405 covered pixels became 4224). A few more
-  // centimetres of lift buys back the bases of the nearest blades without the decal
-  // visibly detaching from the feet. The rest of the anchoring has to come from the fur
-  // shader's ground-line occlusion and from the real cast shadow, not from here.
-  geo.translate(0, 0.045, 0);
+  // NOTE: no geo.translate() any more. Height is per-layer and per-creature-size, so it
+  // has to ride in the instance matrix; baking a constant lift into the geometry is what
+  // pinned every slab to the soil.
   // Multiply, spelled out as custom blending: THREE.MultiplyBlending refuses to run
   // without premultipliedAlpha and falls back to *no* blending, which puts an opaque
   // white card under every creature. dst = dst * src is what we actually want.
@@ -311,13 +378,16 @@ export function makeContactShadows(_legacy, max = 48) {
   };
   mat.customProgramCacheKey = () => 'contactShadow';
 
-  const mesh = new THREE.InstancedMesh(geo, mat, max);
+  const cap = max * CONTACT_LAYERS.length;
+  const mesh = new THREE.InstancedMesh(geo, mat, cap);
   mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(max * 3).fill(1), 3);
+  mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3).fill(1), 3);
   mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
   mesh.frustumCulled = false;
+  // after the opaque pass (terrain, grass, creatures) and before anything additive.
   mesh.renderOrder = 3;
   mesh.count = 0;
   mesh.name = 'creature-contact-shadows';
+  mesh.userData.layers = CONTACT_LAYERS;
   return mesh;
 }

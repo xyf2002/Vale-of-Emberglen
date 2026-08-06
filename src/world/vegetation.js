@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { clamp, lerp, smoothstep, hash2i } from './util.js';
 import { mergeGeos, paint, applyMossShader } from './materials.js';
+import { createContactField } from './contact.js';
 import { AX, AZ } from './terrain.js';
 
 const C = (hex) => new THREE.Color(hex).convertSRGBToLinear();
@@ -477,9 +478,13 @@ export function createGrass(ctx, T) {
       sh.vertexShader = sh.vertexShader
         .replace('#include <common>', `#include <common>
           uniform float uTime; uniform vec2 uWind; uniform float uGust;
-          varying float vBladeH;`)
+          varying float vBladeH; varying float vBladeLen;`)
         .replace('#include <begin_vertex>', `#include <begin_vertex>
-          vBladeH = position.y;`)
+          vBladeH = position.y;
+          vBladeLen = 1.0;
+          #ifdef USE_INSTANCING
+            vBladeLen = length(instanceMatrix[1].xyz);
+          #endif`)
         .replace('#include <project_vertex>', `
           vec4 mvPosition = vec4( transformed, 1.0 );
           #ifdef USE_INSTANCING
@@ -541,7 +546,7 @@ export function createGrass(ctx, T) {
             vGrassN = transformedNormal;
           }`);
       sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', '#include <common>\nvarying float vBladeH;\nvarying vec3 vGrassN;')
+        .replace('#include <common>', '#include <common>\nvarying float vBladeH;\nvarying float vBladeLen;\nvarying vec3 vGrassN;')
         .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
           normal = normalize(vGrassN);
           nonPerturbedNormal = normal;`)
@@ -561,10 +566,27 @@ export function createGrass(ctx, T) {
           // #9's "never black" warning reads at first glance; what #9 forbids is a
           // FLAT black shadow, not a dark root. Widening the ramp is the single
           // biggest lever we own on both distinct-colour count and local contrast.
-          diffuseColor.rgb *= mix(0.26, 1.38, smoothstep(0.0, 0.62, vBladeH));`);
+          diffuseColor.rgb *= mix(0.26, 1.38, smoothstep(0.0, 0.62, vBladeH));
+          // ------------------------------------------------------------------
+          // AND A SECOND RAMP, IN WORLD METRES RATHER THAN BLADE FRACTIONS.
+          //
+          // The ramp above is a fraction of each blade's OWN length, which is the
+          // right shape for "dark where it enters the mat, bright at the tip" but is
+          // wrong for the mat itself. Tuft heights run 0.10-0.80 m in the same field,
+          // so at a fixed 8 cm above the soil a short tuft is already at 1.3x while
+          // its neighbour is at 0.4x, and the carpet has no common FLOOR — which is
+          // what a critic reads when they say the field "sits on" the soil rather
+          // than growing out of it. The whole point of a contact term is that it is a
+          // property of the HEIGHT ABOVE THE GROUND, not of the object.
+          //
+          // vBladeLen is the instance's y scale, i.e. the blade's height in metres,
+          // so vBladeH * vBladeLen is metres above the tuft's own base. 9 cm is about
+          // a fifth of the median blade and matches the "lower 20%" the critic asked
+          // for, but it now means the same 9 cm everywhere.
+          diffuseColor.rgb *= mix(0.85, 1.0, smoothstep(0.0, 0.10, vBladeH * vBladeLen));`);
       applyFoliageWrap(sh, 0.66);
     };
-    m.customProgramCacheKey = () => 'grassblade';
+    m.customProgramCacheKey = () => 'grassblade2';
     return m;
   }
 
@@ -727,6 +749,21 @@ export function createGrass(ctx, T) {
               Math.max(0, l + (col.g - l) * chroma),
               Math.max(0, l + (col.b - l) * chroma));
           }
+          // THE CARPET'S SHARE OF THE OCCLUSION COUNTERWEIGHT.
+          //
+          // See the note beside the ground shader's gain in src/world/index.js: three
+          // systems added ground occlusion in one round and between them pushed two
+          // wide daylight shots through the bottom of the ground/sky band. The
+          // counterweight cannot live entirely in the ground material, because the
+          // ground material is not what the instrument is measuring: in the
+          // over-shoulder and interaction framings the bottom half of the frame is
+          // mostly BLADE, and a 4.5% lift on the terrain moved bottom-half luminance
+          // by only 0.5/255. This is a flat per-instance multiplier, applied after the
+          // near-field chroma expansion so it does not touch saturation, and it is
+          // deliberately flat rather than weighted toward the tip: weighting the tip
+          // would buy the same luminance while pushing local contrast further over a
+          // ceiling that creature_portrait is already sitting on.
+          col.multiplyScalar(1.025);
           mesh.setColorAt(n, col);
           n++;
         }
@@ -743,6 +780,7 @@ export function createGrass(ctx, T) {
     rebuild,
     get count() { return total; },
     get clutterCount() { return clutter.count; },
+    get clutterAO() { return clutter.aoCount; },
     update(dt, elapsed) {
       uniforms.uTime.value = elapsed;
     },
@@ -1184,6 +1222,28 @@ export function createGroundClutter(ctx, T) {
     // ---- the thicket: broad-leaf tufts, near grid then far grid ----
     {
       key: 'tuftNear', id: 5307, step: st(0.74), r1: 13, cast: true, mat: foliageMat,
+      // ------------------------------------------------------------------
+      // NO CONTACT PATCH ON THE TUFT AND WEED FAMILIES — MEASURED, NOT ASSUMED.
+      //
+      // These were the obvious answer to r12's "no contact darkening at the
+      // blade/soil junction", and they were tried at rm 0.62-0.78 / dark 0.22-0.36.
+      // They are the densest families in the build: tuftNear alone puts ~580 clumps
+      // inside 13 m, i.e. better than one per square metre. A 0.7 m patch is 1.5 m^2,
+      // so the patches TILE, and because they are multiplied into the framebuffer they
+      // STACK: three overlapping patches at 0.78 give 0.47, not 0.78.
+      //
+      // Measured back-to-back on the same build: with them in, interaction_feed lost
+      // 18.5% of its ground luminance and creature_portrait 12.9%, against 4.0% on the
+      // over-shoulder frame where the near field is a smaller share of the bottom half.
+      // Both close shots also went over the top of the local-contrast band (edge 9.78
+      // -> 10.62). That is not a contact cue, it is a blanket exposure cut with texture
+      // in it.
+      //
+      // The junction under the fine carpet belongs to the ground shader's carpetAO
+      // term (src/world/index.js), which is a single non-stacking multiply gated on
+      // grass cover, and to the tufts' own applyContactShade. Patches are for objects
+      // sparse enough that the ground between them is still open sky.
+      // ------------------------------------------------------------------
       // `wid` is a HALF width. The first pass ran it at 0.070 and produced 14 cm leaves
       // — the near field grew banana plants. pw_15's foreground blades measure 2-4 cm
       // across and there are a dozen-plus per clump; that ratio is the whole look.
@@ -1238,6 +1298,7 @@ export function createGroundClutter(ctx, T) {
     // ---- garnish: stones, bedrock, deadwood, blooms ----
     {
       key: 'stone', id: 5101, step: st(4.4), r1: 40, cast: true, mat: stoneMat,
+      ao: { rm: 1.50, dark: 0.48 },
       geos: () => [stoneGeometry(rng, noise, 0, false), stoneGeometry(rng, noise, 0, false), stoneGeometry(rng, noise, 1, false)],
       gate: (x, z) => {
         const m = noise.fbm(x * 0.030 + 11, z * 0.030 - 4, 2);
@@ -1247,6 +1308,7 @@ export function createGroundClutter(ctx, T) {
     },
     {
       key: 'outcrop', id: 5203, step: st(11.5), r1: 46, cast: true, mat: stoneMat,
+      ao: { rm: 1.55, dark: 0.50 },
       // bedrock breaks through where the ground is already working — slopes and worn
       // dirt — so the flat meadow the player spawns and gathers berries on stays clear
       geos: () => [stoneGeometry(rng, noise, 1, true), stoneGeometry(rng, noise, 1, true)],
@@ -1262,18 +1324,21 @@ export function createGroundClutter(ctx, T) {
       // genuinely OFF that line, and a fallen branch is also the only strong horizontal
       // in a field of verticals.
       key: 'woodNear', id: 5533, step: st(2.4), r1: 14, cast: true, mat: woodMat,
+      ao: { rm: 1.00, dark: 0.42 },
       geos: () => [branchGeometry(rng, noise), branchGeometry(rng, noise), stumpGeometry(rng, noise)],
       gate: (x, z) => clamp(0.20 + smoothstep(-0.20, 0.30, noise.fbm(x * 0.0042 + 17, z * 0.0042 - 9, 3)) * 0.62, 0, 1),
       place: (h) => ({ s: 0.60 + h * 0.60, sink: 0.02, tilt: 0.22 }),
     },
     {
       key: 'wood', id: 5527, step: st(4.0), r1: 36, cast: true, mat: woodMat,
+      ao: { rm: 1.00, dark: 0.42 },
       geos: () => [branchGeometry(rng, noise), branchGeometry(rng, noise), stumpGeometry(rng, noise)],
       gate: (x, z) => clamp(0.14 + smoothstep(-0.20, 0.30, noise.fbm(x * 0.0042 + 17, z * 0.0042 - 9, 3)) * 0.72, 0, 1),
       place: (h) => ({ s: 0.72 + h * 0.70, sink: 0.02, tilt: 0.20 }),
     },
     {
       key: 'shrub', id: 5741, step: st(6.0), r1: 32, cast: true, mat: foliageMat,
+      ao: { rm: 1.60, dark: 0.52 },
       // createBushes scatters 300 shrubs uniformly over a 288 m disc anchored on the
       // WORLD ORIGIN, and the player spawns 98 m from it: expected shrubs inside the
       // first 15 m of any gameplay framing is 0.3. Same arithmetic as the pebbles.
@@ -1329,6 +1394,15 @@ export function createGroundClutter(ctx, T) {
     fam.push({ k, meshes, cap });
   }
 
+  // ---------------------------------------------------------------- contact patches
+  // The clutter field is camera-relative, so its ground occlusion has to be rebuilt
+  // with it. One field, one draw call, rewritten in place — see contact.js. Families
+  // without an `ao` block (blooms, the far tuft/weed rings) contribute nothing: a
+  // patch smaller than a pixel is a shimmer generator, not an occlusion cue.
+  const aoField = createContactField(T, 2400, { name: 'clutterContact', fadeNear: 26, fadeFar: 46 });
+  group.add(aoField.mesh);
+  const aoList = [];
+
   const m4 = new THREE.Matrix4();
   const qt = new THREE.Quaternion();
   const eu = new THREE.Euler();
@@ -1337,6 +1411,7 @@ export function createGroundClutter(ctx, T) {
 
   function rebuild(camX, camZ) {
     total = 0;
+    aoList.length = 0;
     for (const { k, meshes, cap } of fam) {
       const nOf = meshes.map(() => 0);
       const step = k.step;
@@ -1385,6 +1460,7 @@ export function createGroundClutter(ctx, T) {
             qt.setFromEuler(eu);
             m4.compose({ x: px, y: py - s * p.sink, z: pz }, qt, { x: s, y: s * (0.86 + h4 * 0.34), z: s });
             meshes[vi].setMatrixAt(nOf[vi], m4);
+            if (k.ao) aoList.push({ x: px, z: pz, r: s * k.ao.rm, dark: k.ao.dark });
 
             if (k.key === 'bloom') {
               // Hue is a function of PATCH, not of instance. A drift of one colour with a
@@ -1430,9 +1506,14 @@ export function createGroundClutter(ctx, T) {
         if (meshes[m].instanceColor) meshes[m].instanceColor.needsUpdate = true;
       }
     }
+    aoField.set(aoList);
   }
 
-  return { group, rebuild, get count() { return total; } };
+  return {
+    group, rebuild,
+    get count() { return total; },
+    get aoCount() { return aoField.count; },
+  };
 }
 
 /* ============================================================== TREES ========== */
@@ -1524,8 +1605,11 @@ export function createTrees(ctx, T, rng) {
   // low intensity diffuse falloff, no specular lobe)
   mat.onBeforeCompile = (sh) => applyFoliageWrap(sh, 0.40);
   mat.customProgramCacheKey = () => 'foliagewrap';
-  // trunks need the same ground union a shrub does, just over a longer skirt
-  applyContactShade(mat, { rangeAbs: 0.35, rangeRel: 0.45, dark: 0.42, sinkAbs: -0.15 });
+  // trunks need the same ground union a shrub does, just over a longer skirt.
+  // sinkAbs is POSITIVE: trees compose at `p.y - 0.15`, so the terrain surface sits
+  // 0.15 m ABOVE the instance origin in the varying's frame. It was -0.15, which put
+  // the darkest end of the band 0.30 m underground — see the note on the bush call.
+  applyContactShade(mat, { rangeAbs: 0.35, rangeRel: 0.45, dark: 0.42, sinkAbs: 0.15 });
   const placements = geos.map(() => []);
 
   const ok = (x, z, minSlope = 0.42) => {
@@ -1590,6 +1674,10 @@ export function createTrees(ctx, T, rng) {
   // a trunk as a capped cylinder and the canopy as one sphere: enough to stop a round,
   // cheap enough that 700 trees cost nothing (see the PROP BROADPHASE section)
   const bp = beginPropChannel('trees');
+  // ground-side occlusion under the trunk (see contact.js). Sized off the ROOT FLARE,
+  // not off the canopy: a canopy shadow is the sun's job and moves with it, the patch
+  // under the bole is ambient and does not.
+  const decals = [];
   let count = 0;
   for (let vi = 0; vi < VARIANTS; vi++) {
     const list = placements[vi];
@@ -1611,6 +1699,7 @@ export function createTrees(ctx, T, rng) {
       // clips the visible edge of a trunk should stop rather than pass through
       bp.column(p.x, p.z, (ud.trunkR ?? 0.3) * p.s * 1.35, base, base + th * ((ud.canopyY ?? 0.45) + 0.10), 'wood');
       bp.sphere(p.x, base + th * 0.78, p.z, (ud.canopyR ?? th * 0.28) * p.s, 'foliage');
+      decals.push({ x: p.x, z: p.z, r: Math.max(1.00, (ud.trunkR ?? 0.3) * p.s * 5.2), dark: 0.58 });
       const t = 0.86 + rng.next() * 0.3;
       col.setRGB(t * (0.96 + rng.next() * 0.09), t, t * (0.9 + rng.next() * 0.12));
       mesh.setColorAt(i, col);
@@ -1620,7 +1709,7 @@ export function createTrees(ctx, T, rng) {
     meshes.push(mesh);
     count += list.length;
   }
-  return { meshes, count };
+  return { meshes, count, decals };
 }
 
 /* ============================================================== BUSHES ========= */
@@ -1677,7 +1766,18 @@ export function createBushes(ctx, T, rng) {
   // frame as the fake specifically because of a foreground shrub with "no contact
   // shadow and no ambient occlusion at the ground line". These are ~1.5 m wide, so the
   // occlusion under the skirt runs deeper and further up than a stone's.
-  applyContactShade(mat, { rangeAbs: 0.14, rangeRel: 0.32, dark: 0.34, sinkAbs: -0.10 });
+  // ------------------------------------------------------------------
+  // THE SIGN OF `sinkAbs` WAS WRONG HERE AND ON THE TREES, AND IT HALVED THE EFFECT.
+  //
+  // applyContactShade documents sink as "where the ground plane sits relative to the
+  // instance origin". Bushes compose at `p.y - 0.1`, so the terrain surface is at
+  // +0.10 in that frame. It read -0.10, i.e. the band was anchored 0.20 m too low, so
+  // the darkest end (0.34) landed underground and the lowest VISIBLE fragment of every
+  // shrub came out at mix(0.34, 1, smoothstep(0, 0.46, 0.20)) = 0.61. The critic who
+  // named this bush as the decisive tell was looking at a contact band that was
+  // running at a bit over half strength at the only height it can be seen.
+  // ------------------------------------------------------------------
+  applyContactShade(mat, { rangeAbs: 0.14, rangeRel: 0.32, dark: 0.34, sinkAbs: 0.10 });
   const q = clamp(ctx.quality.grassDensity ?? 1, 0.3, 1.5);
   const lists = variants.map(() => []);
   const target = Math.round(300 * q);
@@ -1700,6 +1800,10 @@ export function createBushes(ctx, T, rng) {
   const up = new THREE.Vector3(0, 1, 0);
   const col = new THREE.Color();
   const bp = beginPropChannel('bushes');
+  // ground-side occlusion patches — see contact.js. A shrub skirt is wider than its
+  // widest lobe and it presses the grass down around itself, so the patch runs a bit
+  // past the silhouette.
+  const decals = [];
   let count = 0;
   for (let v = 0; v < variants.length; v++) {
     const list = lists[v];
@@ -1714,6 +1818,10 @@ export function createBushes(ctx, T, rng) {
       m4.compose({ x: p.x, y: p.y - 0.1, z: p.z }, qt, { x: p.s, y: p.s * rng.range(0.8, 1.2), z: p.s });
       mesh.setMatrixAt(i, m4);
       bp.sphere(p.x, p.y - 0.1 + p.s * 0.62, p.z, p.s * 0.80, 'foliage');
+      // WIDER than the shrub. Its widest lobe reaches ~1.18 in local units, so a
+      // patch at 1.05 is entirely under the leaves and invisible; +0.30 m of skirt is
+      // what actually reads as the thing sitting in the grass rather than on it.
+      decals.push({ x: p.x, z: p.z, r: p.s * 1.34 + 0.34, dark: 0.54 });
       const t = 0.85 + rng.next() * 0.35;
       col.setRGB(t, t * (0.97 + rng.next() * 0.08), t * 0.94);
       mesh.setColorAt(i, col);
@@ -1723,5 +1831,5 @@ export function createBushes(ctx, T, rng) {
     meshes.push(mesh);
     count += list.length;
   }
-  return { meshes, count };
+  return { meshes, count, decals };
 }

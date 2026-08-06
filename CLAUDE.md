@@ -53,6 +53,29 @@ comment in `src/sky/index.js`.
 normal.** Neither can fix terrain acne at a grazing sun — that needs a slope-scaled
 offset, i.e. `polygonOffset` on a `customDepthMaterial`. See `src/world/index.js`.
 
+**`normalBias` scales with nothing.** It is a world-space push, so it costs the same
+absolute centimetres whether the shadow is a mountain's or a creature's. At 0.12 it walked
+every receiver 12 cm out from under its occluder — a fifth of the width off both sides of
+a 60 cm contact shadow, in every frame, no matter how many texels the map had. It beat
+frustum size and cascade count combined as the cause of "nothing casts a shadow", and a
+COARSER box with a lower bias out-measured a finer one by 34%. Check it before you spend a
+round on resolution. See `src/sky/index.js`.
+
+**Anything authored along the view axis projects to a point.** Two agents have now lost
+time to the same geometry from different directions: a rim light down the view axis (below)
+and the sphere's pull-in beam, which was authored along the flight line — and you throw at
+what the reticle is on, so the flight line IS the camera's forward axis. A cone down that
+axis projects to a bullseye: a glowing target ring with no length or direction near, a pale
+30 px disc at range. Give the effect a lateral component so it crosses the frame. See
+`src/spheres/index.js`.
+
+**A shadow map cannot ground a creature standing in tall grass.** The meadow carpet is
+0.30–0.60 m and creatures stand *in* it, so from any playable camera the pixels around a
+creature's base are grass, not ground — darkening the ground plane darkens something nobody
+can see, and the diff image is a comb of blade-shaped slivers. Grounding has to be a stack
+of occluders through the canopy, not one decal on the floor. Raising the single decal to
+clear the canopy detaches it from the feet before it clears. See `src/creatures/materials.js`.
+
 **A rim light down the view axis produces no rim.** At the silhouette edge the normal is
 perpendicular to the view, so N·L is zero exactly where you want the light and the lit
 band lands on the side the lens cannot see. Yaw it off-axis.

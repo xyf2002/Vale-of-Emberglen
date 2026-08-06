@@ -74,6 +74,40 @@ const START_SPHERES = 6;
 const AIM_RANGE = 34;
 const PICKUP_RANGE = 1.5;
 
+/**
+ * WHAT A BREAKOUT COSTS.
+ *
+ * MEASURED, r12: without this block a failed capture left the creature FRIENDLIER than it
+ * was when the sphere left the hand. `tools/_spheretest.mjs [wild]`: trust 0.058 at throw,
+ * 0.320 eight seconds later. `penalise()` docked 0.10 exactly as written — and then the
+ * ordinary taming arc (interaction/Taming.js, the `patient` term) walked the bar straight
+ * back up to `patienceCap(stage)` = 0.32 at 0.05/s while the player stood there. A one-off
+ * subtraction cannot survive a continuous accrual; it has to be a CEILING that is held.
+ * Same run, `[oneBerry]`: 0.34 -> 0.32. Effectively free. Throwing was strictly better
+ * than not throwing, which inverts the entire risk the sphere is supposed to carry.
+ *
+ * So a breakout now installs a window during which:
+ *   - trust is pinned at or below `throwTrust - cost`. Patience cannot buy it back.
+ *   - the creature reads `afraid` — it bolts for `bolt` seconds, then holds off at range,
+ *     still frightened, rather than snapping back to `curious` when the 1.9 s flee expired.
+ *
+ * It is a setback, not a wall. A BERRY CLEARS IT OUTRIGHT (see the `creature:fed` hook in
+ * init) — that is the loop the design asks for: berries buy trust, trust buys catch odds,
+ * and a breakout costs berries to undo. `window` matches CATCH.tiredDecay so the fright
+ * and the winding wear off together rather than leaving one dangling past the other.
+ *
+ * MEASURED after, same wild scenario (trust 0.065 when the sphere left the hand):
+ *   no berry:   0.000 at the breakout, 0.000 still at +6 s (mood `afraid`),
+ *               0.103 at +20 s once the window has lapsed (mood back to `curious`)
+ *   one berry:  ceiling lifted the same frame the meal landed, 0.250 five seconds later
+ * i.e. the fright costs about half a minute of patience, or one berry.
+ */
+const SPOOK = {
+  cost: 0.10,   // docked off the trust it had WHEN THE SPHERE LEFT THE HAND
+  bolt: 2.4,    // seconds of actual running
+  window: 18,   // seconds the ceiling and the fear last
+};
+
 export function createSpheres() {
   let ctx, world, player, creatures, loadout;
   let fx, factory;
@@ -91,6 +125,7 @@ export function createSpheres() {
   let aimChance = 0;
   const pendingTame = [];        // creatures whose trust we are holding at 1 until tamed
   const touched = new Set();     // creatures carrying _sphere state, for decay
+  const spooked = new Map();     // cr -> { t, ceil, bolt } — see SPOOK
 
   // ---- scratch: nothing below is allocated per frame -------------------------
   const camPos = new THREE.Vector3();
@@ -104,8 +139,13 @@ export function createSpheres() {
   for (let i = 0; i < 34; i++) arcPts.push(new THREE.Vector3());
   const UPQ = new THREE.Vector3(0, 1, 0);
   const beamQ = new THREE.Quaternion();
+  const viewV = new THREE.Vector3();   // camera forward, flattened — for the stand-off
+  const sideV = new THREE.Vector3();   // camera right, flattened
+  const camAt = new THREE.Vector3();   // camera world position, sampled inside the FSM
 
   const sizeOf = (cr) => (cr?.stats?.size ?? cr?.def?.size ?? 0.9);
+  /** the creature's trust as BOTH systems see it — Taming keeps its own copy in _tame */
+  const trustOf = (cr) => Math.max(cr?.trust ?? 0, cr?._tame?.trust ?? 0);
   const centreOf = (cr, out) => out.copy(cr.position).setY(cr.position.y + sizeOf(cr) * 0.60);
 
   // ---------------------------------------------------------------- targeting
@@ -195,6 +235,10 @@ export function createSpheres() {
     s.target = target;
     s.aim.copy(aimPt);
     s.chance = target ? catchChance(target) : 0;
+    // the baseline a breakout is measured against. Taken HERE, at release, not at the
+    // burst: between the two the taming arc has had a couple of seconds of `patient`
+    // accrual, and docking off the drifted value is what made the penalty evaporate.
+    s.trust0 = target ? trustOf(target) : 0;
     s.roll = null;
     s.shake = 0;
     s.trailT = 0;
@@ -224,6 +268,9 @@ export function createSpheres() {
     touched.add(cr);
     st.busy = true;
 
+    // a wide throw can clip a creature that was never the target; that one's baseline was
+    // never taken at release, so take it now
+    if (s.target !== cr) s.trust0 = trustOf(cr);
     s.target = cr;
     s.chance = catchChance(cr);
     s.roll = rollShakes(rollRng, s.chance);
@@ -233,16 +280,44 @@ export function createSpheres() {
     s.crStart.copy(cr.position);
     s.crScale = cr.root ? cr.root.scale.x : 1;
     s.crRadius = sizeOf(cr) * 0.9;
+    s.range = 8;
     // Stand the sphere off the creature rather than leaving it where it touched. A
     // sphere sitting ON the creature has no room for a beam, and the pull-in is the beat
-    // that sells the whole mechanic — it has to be legible in a single frame. So: back
-    // along the flight line, a little above the creature's head, mouth pointing at it.
+    // that sells the whole mechanic — it has to be legible in a single frame.
+    //
+    // MEASURED, r12 (scratch probe, pull-in photographed at 7 m and 26 m): the stand-off
+    // used to be "back along the flight line". The flight line is, by construction, the
+    // camera's forward axis — the player throws at what the reticle is on — so the beam
+    // was aimed almost exactly at the lens. A cone down the view axis projects to a
+    // BULLSEYE: at 7 m the pull-in read as a glowing target ring with no length and no
+    // direction, and at 26 m as a ~30 px pale disc. Nothing about it said "dragging".
+    // Same family as the rim-light trap in CLAUDE.md: geometry authored along the view
+    // axis has no silhouette to show.
+    //
+    // So the stand-off is now mostly LATERAL — across the frame — with only a little of
+    // the old backwards component left so the sphere still reads as having arrived from
+    // the player's side. The offset grows with camera range to hold a legible beam length
+    // in pixels; at the authored ~7 m it is unchanged in magnitude, only rotated.
     centreOf(cr, tv);
     tv2.copy(s.pos).sub(tv).setY(0);
     if (tv2.lengthSq() < 1e-4) tv2.set(0, 0, 1);
-    tv2.normalize().multiplyScalar(1.25);
+    tv2.normalize();
+    if (ctx.camera) {
+      ctx.camera.getWorldDirection(viewV);
+      ctx.camera.getWorldPosition(camAt);
+    } else { viewV.set(0, 0, -1); camAt.copy(tv); }
+    viewV.y = 0;
+    if (viewV.lengthSq() < 1e-6) viewV.set(0, 0, -1);
+    viewV.normalize();
+    sideV.crossVectors(UPQ, viewV).normalize();
+    // keep it on the side the sphere already flew in from, so it does not snap across the
+    // creature at the moment of contact
+    if (sideV.dot(tv2) < 0) sideV.negate();
+    const range = s.range = camAt.distanceTo(tv);
+    const off = 1.25 * clamp(range / 9, 1, 1.9);
+    tv2.multiplyScalar(0.34).addScaledVector(sideV, 0.94).normalize().multiplyScalar(off);
     s.pos.copy(tv).add(tv2);
-    s.pos.y = tv.y + 0.45;
+    s.pos.y = tv.y + 0.45 + Math.max(0, off - 1.25) * 0.35;
     s.pos.y = Math.max(s.pos.y, heightAt(s.pos.x, s.pos.z) + SHELL_R * 2);
 
     ctx.bus.emit('sphere:hit', {
@@ -276,23 +351,46 @@ export function createSpheres() {
     if (cr._sphere) cr._sphere.busy = false;
   }
 
-  /** it burst out: warier, winded, and running */
-  function penalise(cr) {
+  /**
+   * It burst out: warier, winded, and running.
+   *
+   * `trust0` is what it was worth when the sphere left the hand. The ceiling comes off
+   * whichever is LOWER of that and its trust right now, so a creature that lost ground to
+   * something else mid-flight is not handed any of it back by the breakout.
+   *
+   * NOTE (negative result, r12): docking trust once — which is all this used to do — is
+   * not a penalty at all while the taming arc is running. See the SPOOK block above for
+   * the measured numbers. Do not "simplify" this back into a single subtraction.
+   *
+   * NOTE: the ideal shape here would be `taming.addTrust(cr, -cost, 'broke-out')`, so the
+   * dock ran through the same path as every other trust change and emitted `taming:trust`.
+   * It is not reachable: interaction/index.js exposes only { inventory, focus, prompt,
+   * marked, readout, companions, forage, arc } to peers — `addTrust`, `stateOf` and the
+   * rest of createTaming's api never leave that closure. Writing `cr._tame` directly is
+   * the coupling this file already had; widening it was not mine to do.
+   */
+  function penalise(cr, trust0) {
     const st = cr._sphere;
     st.breakouts++;
     st.tired = 1;
     const t = cr._tame;
-    const before = Math.max(cr.trust ?? 0, t?.trust ?? 0);
-    const after = Math.max(0, before - 0.10);
-    cr.trust = after;
+    const base = Math.min(trustOf(cr), trust0 ?? 1);
+    const ceil = clamp(base - SPOOK.cost, 0, 1);
+    cr.trust = ceil;
     if (t) {
-      t.trust = after;
-      t.act = 'flee'; t.actT = 1.9; t.spookCd = 2.2; t.lastDist = 999;
+      t.trust = ceil;
+      t.act = 'flee'; t.actT = SPOOK.bolt; t.spookCd = SPOOK.bolt + 0.4; t.lastDist = 999;
       t.noticed = true;
     }
     cr.mood = 'afraid';
     cr.playAnim?.('run');
+    // a second breakout re-arms the window from the already-lowered ceiling, so spamming
+    // spheres at one animal ratchets it down rather than resetting it
+    spooked.set(cr, { t: SPOOK.window, ceil, bolt: SPOOK.bolt });
   }
+
+  /** a berry (or a catch) ends the fright early — the way back is always food */
+  function unspook(cr) { if (cr) spooked.delete(cr); }
 
   /**
    * It closed. Hand the creature to the EXISTING taming path rather than inventing a
@@ -302,6 +400,7 @@ export function createSpheres() {
    * private "tamed" flag would give a companion the roster never heard about.
    */
   function grant(cr) {
+    unspook(cr);        // a later sphere landed: the fright from the earlier one is moot
     cr.trust = 1;
     const t = cr._tame;
     if (t) {
@@ -391,11 +490,18 @@ export function createSpheres() {
           beamQ.setFromUnitVectors(UPQ, tv2.normalize());
           m.beam.position.copy(s.pos);
           m.beam.quaternion.copy(beamQ);
-          m.setBeam(true, len, 0.35 + Math.sin(u * Math.PI) * 0.65);
+          // the beam is the load-bearing read of this beat, so it holds a minimum
+          // apparent width as the throw gets longer rather than tapering to a hairline
+          const far = clamp(s.range / 11, 1, 1.7);
+          m.setBeam(true, len, 0.35 + Math.sin(u * Math.PI) * 0.65, far);
           const off = m.beam.material.map.offset;
           off.y = (off.y - dt * 2.6) % 1;
-          // motes spiralling in, off the creature's body rather than its feet
-          for (let i = 0; i < 3; i++) fx.swirl(tv, s.pos, s.crRadius * (1 - e * 0.7));
+          // Motes spiralling in, off the creature's body rather than its feet. These are
+          // the first thing to go at range: 0.05 m is about one pixel at 26 m, and one
+          // additive pixel over sunlit grass is nothing. Count and size both lean on
+          // camera distance so the vortex survives the throw it was built for.
+          const n = far > 1.35 ? 5 : 3;
+          for (let i = 0; i < n; i++) fx.swirl(tv, s.pos, s.crRadius * (1 - e * 0.7), 0xffeec4, far);
         }
         if (u >= 1) {
           s.phase = 'shut'; s.t = 0;
@@ -577,7 +683,7 @@ export function createSpheres() {
       creature: cr, atShake: s.shake + 1, chance: +s.chance.toFixed(3),
     });
     releaseCreature(cr, s, s.pos, true);
-    if (cr) penalise(cr);
+    if (cr) penalise(cr, s.trust0);
     fx.ring(s.pos, { r0: 0.2, r1: 2.6, dur: 0.5, color: 0xffb37a });
     fx.burst(s.pos, { n: 24, color: 0xffc07a, speed: 4.2, size: 0.065, life: 0.5, up: 1.4, grav: 7 });
   }
@@ -624,14 +730,21 @@ export function createSpheres() {
           pos: new THREE.Vector3(), vel: new THREE.Vector3(),
           aim: new THREE.Vector3(), crStart: new THREE.Vector3(),
           spinAxis: new THREE.Vector3(0, 1, 0), spin: 0,
-          target: null, roll: null, chance: 0, shake: 0,
-          wobbleDir: 1, trailT: 0, crScale: 1, crRadius: 0.9,
+          target: null, roll: null, chance: 0, shake: 0, trust0: 0,
+          wobbleDir: 1, trailT: 0, crScale: 1, crRadius: 0.9, range: 8,
         });
       }
 
       held = factory.create();
       held.root.visible = false;
       c.scene.add(held.root);
+
+      // A berry is the way back. Feeding is the only thing that lifts the ceiling early,
+      // which is exactly the intended loop — a breakout costs berries to undo, it does
+      // not lock the creature out. Watched over the bus rather than polled: interaction
+      // already announces every meal, and `taming.advance()` does the trust step itself.
+      c.bus.on('creature:fed', (p) => unspook(p?.creature));
+      c.bus.on('creature:tamed', (p) => unspook(p?.creature));
     },
 
     update(dt, c) {
@@ -695,6 +808,31 @@ export function createSpheres() {
         if (st.tired > 0) st.tired = Math.max(0, st.tired - dt / CATCH.tiredDecay);
       }
 
+      // ---- a creature that burst out stays spooked ------------------------
+      // This runs at ORDER.SPHERES (64), i.e. AFTER ai (50) and interaction (60) have
+      // each had their say about mood and trust this frame, so what is written here is
+      // what the UI (80) and audio (90) read. That ordering is the whole reason a
+      // ceiling works: it is re-asserted downstream of the accrual that fights it.
+      for (const [cr, spk] of spooked) {
+        spk.t -= dt;
+        if (cr.tamed || spk.t <= 0) { spooked.delete(cr); continue; }
+        spk.bolt -= dt;
+        const t = cr._tame;
+        if ((cr.trust ?? 0) > spk.ceil) cr.trust = spk.ceil;
+        if (t && t.trust > spk.ceil) t.trust = spk.ceil;
+        // Keep it running for the bolt only. Holding `flee` for the whole window was
+        // tried and is wrong: flee moves at speed*1.8 away from the player, so eighteen
+        // seconds of it carries the creature past Taming's ENGAGE_RANGE, at which point
+        // it disengages, stops being driven, and the fright reads as nothing at all.
+        if (spk.bolt > 0 && t && t.act !== 'flee') { t.act = 'flee'; t.actT = spk.bolt; }
+        // After the bolt it holds off and watches, still frightened. `afraid` rather than
+        // `wary` is deliberate: `wary` is what Taming's `shy` means — mildly uneasy — and
+        // it would also halve Catch.readFactors' `startled` term mid-window, so waiting
+        // would make the follow-up throw HARDER. The fright is the state; it ends when
+        // the window ends or when the player feeds it.
+        cr.mood = 'afraid';
+      }
+
       // ---- hold a caught creature at full trust until the arc completes ----
       // interaction/index.js does the completing; taming.update can still dock trust in
       // the frame between, so keep re-asserting rather than setting it once and hoping.
@@ -748,6 +886,10 @@ export function createSpheres() {
           ? { species: aimCreature.species, trust: +(aimCreature.trust ?? 0).toFixed(2), chance: +aimChance.toFixed(3) }
           : null,
         active: act,
+        /** additive: creatures still frightened from a breakout, and how long each has left */
+        spooked: [...spooked].map(([cr, spk]) => ({
+          species: cr.species, left: +spk.t.toFixed(1), ceil: +spk.ceil.toFixed(3),
+        })),
         fx: fx?.stats?.() ?? null,
       };
     },

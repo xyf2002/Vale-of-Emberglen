@@ -3,6 +3,7 @@ import { ORDER } from '../engine/Game.js';
 import { buildAvatar, RIG } from './Avatar.js';
 import { createAnimator } from './Animator.js';
 import { createCameraRig, CAM } from './CameraRig.js';
+import { createGrounding } from './Grounding.js';
 
 /**
  * PLAYER SYSTEM — owned by the player builder. Owns the avatar, its animation, and the
@@ -90,7 +91,7 @@ export function createPlayer() {
   let aimT = 0;             // the one blend everything aim-related reads
   let gunAimT = 0;          // weapons only — the lens narrows for a scope, not a throw
   let sphereAimT = 0;       // our own ramp over the sphere system's boolean
-  let root, contact, contactMat;
+  let root, contact;
   const UP = new THREE.Vector3(0, 1, 0);
   let focusPos = null;
   const focusVec = new THREE.Vector3();
@@ -113,32 +114,6 @@ export function createPlayer() {
     snap() { cam.snap(); },
     rig: cam,
   };
-
-  function makeContactShadow() {
-    const size = 128;
-    const cv = document.createElement('canvas');
-    cv.width = cv.height = size;
-    const g = cv.getContext('2d');
-    const grd = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-    // hard-ish inner core with ~0.2 m of falloff (reference note #9)
-    grd.addColorStop(0.00, 'rgba(0,0,0,0.85)');
-    grd.addColorStop(0.34, 'rgba(0,0,0,0.72)');
-    grd.addColorStop(0.62, 'rgba(0,0,0,0.28)');
-    grd.addColorStop(1.00, 'rgba(0,0,0,0.0)');
-    g.fillStyle = grd;
-    g.fillRect(0, 0, size, size);
-    const tex = new THREE.CanvasTexture(cv);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    contactMat = new THREE.MeshBasicMaterial({
-      map: tex, transparent: true, depthWrite: false, opacity: 0.55,
-      color: 0x1b2415, blending: THREE.NormalBlending,
-    });
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 0.95), contactMat);
-    m.rotation.x = -Math.PI / 2;
-    m.renderOrder = 2;
-    m.frustumCulled = false;
-    return m;
-  }
 
   const api = {
     name: 'player',
@@ -177,7 +152,7 @@ export function createPlayer() {
       root = avatar.root;
       c.scene.add(root);
 
-      contact = makeContactShadow();
+      contact = createGrounding({ footprint: 0.46 });
       c.scene.add(contact);
 
       const spot = world?.sampleSpawn?.(c.rng.fork(7), { maxSlope: 0.18 }) ?? { x: 0, z: 0 };
@@ -355,17 +330,13 @@ export function createPlayer() {
         accelFwd, lookPitch: cam.pitch * 0.5, lookYaw: 0,
       }, groundAt);
 
-      // ------------------------------------------------------ contact shadow
+      // --------------------------------------------------- contact occlusion
+      // A stack of multiply slabs through the grass canopy, not a decal on the soil.
+      // See src/player/Grounding.js for the measurement that forced that shape.
       const cg = groundAt(position.x, position.z);
-      const airGap = clamp((position.y - cg) / 1.6, 0, 1);
-      contact.position.set(position.x, cg + 0.035, position.z);
-      const spread = 1 + airGap * 0.5;
-      contact.scale.set(spread, spread, 1);
-      contactMat.opacity = (0.52 - airGap * 0.34) * (1 - crouchT * 0.12);
-      if (world?.normalAt) {
-        const n = world.normalAt(position.x, position.z);
-        contact.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
-      }
+      const airGap = clamp((position.y - cg) / 1.4, 0, 1);
+      contact.place(position.x, position.z, cg, airGap, crouchT,
+        world?.normalAt ? world.normalAt(position.x, position.z) : null);
 
       // ----------------------------------------------------------- rim light
       if (sky?.getSunColor) {

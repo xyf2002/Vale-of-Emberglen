@@ -245,13 +245,28 @@ export function speciesAsset(def, rng) {
  *   - Mosshorn is a low barrel whose whole underside is within 40 cm of the grass.
  *   - Dewhare flares to the ground with no visible legs, so its ground line is the
  *     silhouette; too much occlusion there and it looks amputated.
+ *
+ * NOTE FOR ANYONE TUNING GROUND OCCLUSION: this object is spread over furMaterial's
+ * arguments, so IT WINS. Raising `groundAO` on the furMaterial signature does nothing
+ * for woolkin, mosshorn or dewhare — that cost r13 one probe run to notice. Change it
+ * here, or here as well.
+ *
+ * r13 raised every ground line. The meadow carpet is 0.30-0.60 m tall, so a Woolkin's
+ * lower third is literally inside the grass, and the old ramps (0.30 of normalised body
+ * height on a 0.95 m creature is ~28 cm) finished at or below the blade tips — the
+ * visible bottom of the body was as bright as its back, which is half of why two blind
+ * critics in a row said it floats. The other half is the ground, handled by
+ * CONTACT_LAYERS in materials.js.
  */
 function formLighting(def) {
   switch (def.id) {
-    case 'woolkin': return { key: 2.05, ambFloor: 0.23, groundAO: 0.52, groundAOh: 0.30 };
-    case 'mosshorn': return { key: 2.00, ambFloor: 0.30, groundAO: 0.46, groundAOh: 0.34 };
-    case 'dewhare': return { key: 1.95, ambFloor: 0.34, groundAO: 0.30, groundAOh: 0.14 };
-    default: return { key: 2.10, ambFloor: 0.28, groundAO: 0.40, groundAOh: 0.20 };
+    case 'woolkin': return { key: 2.05, ambFloor: 0.23, groundAO: 0.62, groundAOh: 0.38 };
+    case 'mosshorn': return { key: 2.00, ambFloor: 0.30, groundAO: 0.56, groundAOh: 0.42 };
+    // dewhare's silhouette IS its ground line — it flares to the floor with no legs, so
+    // this one stays shallow. Pushed past ~0.40 it stops reading as a creature standing
+    // in grass and starts reading as a creature with no bottom.
+    case 'dewhare': return { key: 1.95, ambFloor: 0.34, groundAO: 0.38, groundAOh: 0.20 };
+    default: return { key: 2.10, ambFloor: 0.28, groundAO: 0.50, groundAOh: 0.28 };
   }
 }
 

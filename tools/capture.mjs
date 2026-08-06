@@ -99,6 +99,17 @@ async function main() {
   // runs) because the harness was subscribing to file changes it had no use for.
   // Nothing about determinism or the probe is relaxed here — the opposite: this is what
   // makes a captured round correspond to a single, known state of the tree.
+  //
+  // KNOWN GAP, do not over-trust this. It protects the page that is ALREADY LOADED. It
+  // does not protect `freshPage()`, which every shot and every strip calls and which
+  // re-fetches modules from vite — so a concurrent agent saving a broken file mid-round
+  // still lands in the middle of a capture. Measured: an r13 round died on
+  // `ReferenceError: SHADOW_NEAR_S is not defined` from a half-saved src/sky/index.js,
+  // several shots in. The harness FAILED LOUDLY and measure.py refused the round, which
+  // is the designed behaviour and why this is a nuisance rather than a silent corruption
+  // — but "the harness photographs the build it started with" is only true for a round
+  // captured while nothing else is writing to src/. Sequence captures against builders,
+  // or expect to re-run.
   const server = await createServer({
     server: { port: 0, host: '127.0.0.1', strictPort: false, hmr: false, watch: null },
     logLevel: 'error',
