@@ -1,9 +1,0 @@
-{
-  "_note": "Fairest reference comp per matched shot. interaction_feed is deliberately absent: nothing in the official set shows peaceful player-creature interaction, so forcing a comp would produce a dishonest comparison.",
-  "_no_reuse": "Each shot must use a DISTINCT reference image. r08 used pw_11 for both vista_golden and overshoulder_meadow; the critic spotted that the two 'A' images were identical, which leaks information across pairs — if one is known to be the real game, so is the other. overshoulder_meadow now uses pw_10, which the curator named the cleanest over-shoulder framing in the set.",
-  "vista_golden": ["reference/palworld/pw_11.jpg"],
-  "overshoulder_meadow": ["reference/palworld/pw_10.jpg"],
-  "creature_portrait": ["reference/palworld/pw_15.jpg"],
-  "creature_group": ["reference/palworld/pw_07.jpg"],
-  "dusk_mood": ["reference/palworld/pw_16.jpg"]
-}

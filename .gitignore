@@ -5,6 +5,4 @@ captures/
 __pycache__/
 .vercel
 .env*
-reference/palworld/
-reference/palworld_video/
-reference/elder-scrolls-*
+reference/
