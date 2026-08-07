@@ -54,7 +54,12 @@ const ease = (u) => u * u * (3 - 2 * u);
 
 /** how long each beat lasts, in seconds */
 const T = {
-  windup: 0.17,
+  // MUST equal player/Animator.js's THROW_KEYS.release * GESTURE_TIME.throw
+  // (0.484 * 0.62). The sphere leaves the hand on the frame the arm reaches full
+  // extension; move one of these two numbers without the other and it spawns out of an
+  // arm that is still behind the ear. It was 0.17 s, which was also the entire length of
+  // the old forward swing — see the measured note on THROW_KEYS.
+  windup: 0.30,
   open: 0.12,
   suck: 0.44,
   shut: 0.12,
@@ -839,9 +844,16 @@ export function createSpheres() {
         // carried at the hip; brought up in front of the chest while aiming
         const a = aiming ? 1 : 0;
         holdAim = holdAim + (a - holdAim) * Math.min(1, dt * 9);
-        const up = 1.10 + holdAim * 0.26;
-        const rightOff = 0.30 - holdAim * 0.04;
-        const fwdOff = 0.16 + holdAim * 0.20;
+        // AIMING IS HALF THE WIND-UP. At rest the sphere rides at the hip; taking aim
+        // lifts it to the right ear and a hand's width BEHIND the shoulder line, which
+        // is a cocked-and-waiting pose rather than a presentation. Two things fall out
+        // of that: the throw itself only has to travel the second half of the arc, so
+        // the whole 0.62 s budget goes into the swing that has to be seen; and the
+        // predicted-landing arc, which is drawn from the hand, now starts within a few
+        // centimetres of where the ball actually leaves it instead of half a metre low.
+        const up = 1.10 + holdAim * 0.42;             // hip -> ear
+        const rightOff = 0.30 - holdAim * 0.02;
+        const fwdOff = 0.16 - holdAim * 0.20;         // 0.16 forward -> 0.04 behind
         carry.set(
           player.position.x + Math.cos(by) * rightOff - Math.sin(by) * fwdOff,
           player.position.y + up - (1 - raise) * 0.3,

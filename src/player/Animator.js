@@ -48,7 +48,40 @@ const _handL = new THREE.Vector3();
 const ARM_REACH = (RIG.upperArm + RIG.foreArm);
 
 /** seconds each one-shot gesture runs for; see the gesture block in update() */
-const GESTURE_TIME = { offer: 1.55, pet: 1.55, throw: 0.45 };
+const GESTURE_TIME = { offer: 1.55, pet: 1.55, throw: 0.62 };
+
+/**
+ * THE THROW, as keyframes on the gesture's own 0..1 clock (0.62 s end to end).
+ *
+ * MEASURED, and it is the whole reason these numbers exist. The first version ran in
+ * 0.45 s with the forward swing allotted 0.054 s: tools/_throwstrip.mjs sampled the
+ * shoulder every 0.04 s and caught it going from -105.7 deg to +82.6 deg in ONE step.
+ * 156 degrees inside about three rendered frames is not a swing, it is a teleport — the
+ * arm was behind the head in one frame and in front of the chest in the next, the sphere
+ * left the hand somewhere inside that gap, and the remaining 0.28 s was spent creeping
+ * from 86 deg back to 33 deg, which reads as lowering the arm rather than following
+ * through. The animation was 60% dead time and 0% arc.
+ *
+ * So the budget moved to where the eye is: 0.16 s of wind-up, 0.14 s of SWING (~8
+ * frames, the part that has to be legible), 0.12 s of deceleration across the body, and
+ * 0.20 s settling back to the carry. RELEASE sits at the end of the swing and must stay
+ * equal to src/spheres' T.windup — 0.484 * 0.62 = 0.30 s — or the ball leaves a hand
+ * that is not where the throw says it is.
+ *
+ * The arc is NOT in the sagittal plane. A pure shoulder-pitch swing happens along the
+ * gameplay camera's view axis (it sits directly behind the traveller) and projects to a
+ * short vertical smear; the same trap already cost this project a rim light, a capture
+ * beam and a low-ready muzzle. Carrying `z` (abduction) and `y` out and then in tilts
+ * the swing plane about 35 degrees off vertical, so the hand crosses the frame.
+ */
+const THROW_KEYS = {
+  //          shoulder x     y      z    elbow x  wrist x
+  ready:   { t: 0.00, sx: -0.55, sy: -0.12, sz: 0.30, ex: 1.55, hx: -0.10 },
+  cock:    { t: 0.26, sx: -1.75, sy: -0.38, sz: 0.46, ex: 2.10, hx: -0.30 },
+  release: { t: 0.484, sx: 1.35, sy: 0.10, sz: 0.26, ex: 0.22, hx: 0.45 },
+  cross:   { t: 0.68, sx: 0.95, sy: 0.35, sz: -0.10, ex: 0.55, hx: 0.20 },
+  settle:  { t: 1.00, sx: 0.25, sy: 0.05, sz: 0.14, ex: 0.70, hx: 0.12 },
+};
 
 const damp = (a, b, l, dt) => a + (b - a) * (1 - Math.exp(-l * dt));
 const smooth = (t) => t * t * (3 - 2 * t);
@@ -67,6 +100,7 @@ export function createAnimator(avatar) {
     anticip: 0,       // 0..1 pre-jump crouch
     gesture: 0,       // 0..1 progress through the offer animation
     gestureActive: false,
+    gestureOut: 0,    // 1..0 authority fade AFTER the clock reaches the end; see update()
     gestureKind: 'offer',
     lean: 0,
     leanSide: 0,
@@ -466,14 +500,30 @@ export function createAnimator(avatar) {
       // ---- one-shot upper-body gestures ------------------------------------
       // Two shapes with different clocks: the offer is a slow, deliberate hold (1.55 s,
       // most of it spent with the berry out where a creature can decide about it), the
-      // throw is a whip (0.45 s). Running the throw on the offer's clock was the first
+      // throw is a whip (0.62 s). Running the throw on the offer's clock was the first
       // attempt and it looked like the traveller was placing the sphere on a shelf.
       const gdur = GESTURE_TIME[S.gestureKind] ?? 1.55;
+      /**
+       * THE CLOCK ONLY EVER RUNS FORWARD, and that took a measurement to find out it
+       * wasn't. `S.gesture` used to decay back to zero at 5.5/s once the gesture ended —
+       * but the pose is sampled at `S.gesture`, so the decay played the whole animation
+       * in REVERSE at about four times speed. tools/_throwstrip.mjs, frames 38-43: the
+       * shoulder finishes the follow-through at -0.9 deg and then goes 11 -> 38.7 ->
+       * 52.3 -> 65.8, climbing back towards the release pose. The traveller un-threw the
+       * ball. It survived because no single reverse step exceeds the 35 deg/frame the
+       * strip's teleport verdict looks for — it is a smooth, wrong motion, not a jump.
+       *
+       * So the phase stops at 1 and a separate `gestureOut` fades authority out. At a
+       * natural end that fade is already redundant (both gw curves are 0 at g=1, which
+       * is what made the reverse replay so easy to miss); it exists so a gesture
+       * CANCELLED mid-swing releases the arm instead of rewinding it.
+       */
       if (S.gestureActive) {
         S.gesture += dt / gdur;
-        if (S.gesture >= 1) { S.gesture = 1; S.gestureActive = false; }
-      } else if (S.gesture > 0) {
-        S.gesture = Math.max(0, S.gesture - dt * (S.gestureKind === 'throw' ? 5.5 : 1.6));
+        if (S.gesture >= 1) { S.gesture = 1; S.gestureActive = false; S.gestureOut = 1; }
+      } else if (S.gestureOut > 0) {
+        S.gestureOut = Math.max(0, S.gestureOut - dt * (S.gestureKind === 'throw' ? 5.5 : 1.6));
+        if (S.gestureOut === 0) S.gesture = 0;
       }
       const g = S.gesture;
       const throwing = S.gestureKind === 'throw';
@@ -484,6 +534,7 @@ export function createAnimator(avatar) {
           ? (g < 0.10 ? smooth(g / 0.10) : g < 0.82 ? 1 : smooth(1 - (g - 0.82) / 0.18))
           // ramp in 0..0.22, hold to 0.7, ease out to 1
           : (g < 0.22 ? smooth(g / 0.22) : g < 0.7 ? 1 : smooth(1 - (g - 0.7) / 0.3));
+        if (!S.gestureActive) gw *= S.gestureOut;
       }
       S.gestureW = gw;      // a gesture outranks a held weapon, in holdWeapon()
       rig.berry.visible = gw > 0.05 && S.gestureKind === 'offer';
@@ -491,54 +542,71 @@ export function createAnimator(avatar) {
       /**
        * THE THROW. Cock back over the shoulder, whip through, follow across the body.
        *
-       * `RELEASE` is where the hand is open and the sphere leaves — 0.38 of 0.45 s is
-       * 0.17 s, which is exactly src/spheres' own wind-up (T.windup), so the ball leaves
-       * the hand on the frame the arm reaches full extension. If either number moves the
-       * other has to move with it or the sphere spawns out of a hand that is still
-       * behind the ear.
+       * `THROW_KEYS.release` is where the hand opens and the sphere leaves — 0.484 of
+       * 0.62 s is 0.30 s, which is exactly src/spheres' own wind-up (T.windup), so the
+       * ball leaves the hand on the frame the arm reaches full extension. If either
+       * number moves the other has to move with it or the sphere spawns out of a hand
+       * that is still behind the ear. Measured: the probe reports launch and wind-up apex
+       * as separate frame indices, and their gap IS the visible swing.
        *
        * The elbow leads the shoulder on the way through (it stays flexed until after
        * the shoulder has passed vertical, then extends): that lag is the entire
        * difference between a throw and a salute.
        */
       if (throwing && gw > 0) {
-        // Three phases on the gesture's own 0..1, and the middle one is tiny on purpose:
-        //   0    -> COCK   the arm goes back and up, elbow folded behind the ear
-        //   COCK -> WHIP   0.054 s of arm, passing full forward extension at 0.38
-        //   WHIP -> 1      follow-through: the arm falls across the body
-        // 0.38 of 0.45 s is 0.17 s, which is src/spheres' T.windup — the ball leaves on
-        // the frame the arm is straightest. Move one and the other must move with it.
-        const COCK = 0.30, WHIP = 0.42;
+        const K = THROW_KEYS;
         const L = THREE.MathUtils.lerp;
-        let shX, shY, shZ, elX, handX, torso;
-        if (g < COCK) {
-          const k = smooth(g / COCK);
-          shX = L(0.15, -1.95, k); elX = L(0.35, 2.05, k);
-          shZ = L(0.12, 0.34, k); shY = L(0, -0.34, k);
-          handX = L(0.1, -0.30, k); torso = k;              // +1 wound up
-        } else if (g < WHIP) {
-          const k = smooth((g - COCK) / (WHIP - COCK));
-          shX = L(-1.95, 1.55, k); elX = L(2.05, 0.25, k);
-          shZ = L(0.34, 0.14, k); shY = L(-0.34, 0.14, k);
-          handX = L(-0.30, 0.55, k); torso = 1 - 2 * k;     // whips through to -1
+        let a, b, k, torso;
+        if (g < K.cock.t) {
+          a = K.ready; b = K.cock;
+          k = smooth((g - a.t) / (b.t - a.t));
+          torso = k;                                   // +1 = fully wound up
+        } else if (g < K.release.t) {
+          a = K.cock; b = K.release;
+          const u = (g - a.t) / (b.t - a.t);
+          // The swing ACCELERATES into the release — that is what makes it read as a
+          // throw and not a wave. The exponent is not free: at 1.35 the fastest frame
+          // moves about 1.35x the average, which keeps the peak inside the 35 deg per
+          // frame the strip probe checks. Squaring it (a natural-looking accel) puts the
+          // last frame at ~2x and the teleport comes back.
+          k = Math.pow(u, 1.35);
+          torso = 1 - 2 * k;                           // unwinds through to -1
+        } else if (g < K.cross.t) {
+          a = K.release; b = K.cross;
+          const u = (g - a.t) / (b.t - a.t);
+          k = 1 - (1 - u) * (1 - u);                   // decelerating: the arm is spent
+          torso = -1;
         } else {
-          const k = smooth((g - WHIP) / (1 - WHIP));
-          shX = L(1.55, 0.45, k); elX = L(0.25, 0.75, k);
-          shZ = L(0.14, 0.16, k); shY = L(0.14, 0.05, k);
-          handX = L(0.55, 0.15, k); torso = L(-1, 0, k);
+          a = K.cross; b = K.settle;
+          k = smooth((g - a.t) / (b.t - a.t));
+          torso = L(-1, 0, k);
         }
+
         const sh = rig.armR.shoulder.rotation;
         const el = rig.armR.elbow.rotation;
-        sh.x = L(sh.x, shX, gw); sh.y = L(sh.y, shY, gw); sh.z = L(sh.z, shZ, gw);
-        el.x = L(el.x, elX, gw);
-        rig.armR.hand.rotation.set(L(rig.armR.hand.rotation.x, handX, gw), 0, 0);
+        sh.x = L(sh.x, L(a.sx, b.sx, k), gw);
+        sh.y = L(sh.y, L(a.sy, b.sy, k), gw);
+        sh.z = L(sh.z, L(a.sz, b.sz, k), gw);
+        el.x = L(el.x, L(a.ex, b.ex, k), gw);
+        rig.armR.hand.rotation.set(L(rig.armR.hand.rotation.x, L(a.hx, b.hx, k), gw), 0, 0);
+
         // the left arm counterweights: forward while the right is back, and back as the
         // right comes through. Without it the whole body reads as one stiff plank.
         rig.armL.shoulder.rotation.x = L(rig.armL.shoulder.rotation.x, 0.55 * torso, gw);
         rig.armL.elbow.rotation.x = L(rig.armL.elbow.rotation.x, 0.45 + 0.45 * Math.abs(torso), gw);
-        // torso winds up and unwinds with the arm; the head stays pointed downrange
-        rig.chest.rotation.y += 0.32 * torso * gw;
-        rig.chest.rotation.x -= 0.09 * Math.max(0, -torso) * gw;
+
+        // ---- the rest of the body throws too --------------------------------
+        // An arm swinging off a statue is the other half of why this did not read. The
+        // chest leads, the PELVIS COUNTER-ROTATES at about 40% (a real throw uncoils
+        // from the ground up, and the pelvis arriving with the chest cancels the coil),
+        // the torso pitches forward over the release, and the weight crosses from the
+        // back foot to the front. No scripted step: foot placement belongs to the leg IK
+        // and a one-shot stride would fight it for the same two ankles.
+        rig.chest.rotation.y += 0.34 * torso * gw;
+        rig.chest.rotation.x -= 0.14 * Math.max(0, -torso) * gw;
+        rig.hips.rotation.y -= 0.16 * torso * gw;
+        rig.hips.position.z += -0.05 * torso * gw;     // weight back on the coil, forward on the throw
+        rig.hips.position.y -= 0.02 * Math.abs(torso) * gw;
         rig.neck.rotation.y -= 0.28 * torso * gw;
       } else if (gw > 0) {
         const bobG = Math.sin(g * Math.PI * 4) * 0.04 * (g > 0.25 && g < 0.72 ? 1 : 0);
