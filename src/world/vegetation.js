@@ -478,7 +478,7 @@ export function createGrass(ctx, T) {
       sh.vertexShader = sh.vertexShader
         .replace('#include <common>', `#include <common>
           uniform float uTime; uniform vec2 uWind; uniform float uGust;
-          varying float vBladeH; varying float vBladeLen;`)
+          varying float vBladeH; varying float vBladeLen; varying float vBladeD;`)
         .replace('#include <begin_vertex>', `#include <begin_vertex>
           vBladeH = position.y;
           vBladeLen = 1.0;
@@ -511,6 +511,7 @@ export function createGrass(ctx, T) {
             mvPosition.y -= bend * bend * amp * 0.30;
           }
           mvPosition = modelViewMatrix * mvPosition;
+          vBladeD = -mvPosition.z;
           gl_Position = projectionMatrix * mvPosition;`);
       // ------------------------------------------------------------------
       // THE BLACK MEADOW BUG.
@@ -546,7 +547,7 @@ export function createGrass(ctx, T) {
             vGrassN = transformedNormal;
           }`);
       sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', '#include <common>\nvarying float vBladeH;\nvarying float vBladeLen;\nvarying vec3 vGrassN;')
+        .replace('#include <common>', '#include <common>\nvarying float vBladeH;\nvarying float vBladeLen;\nvarying float vBladeD;\nvarying vec3 vGrassN;')
         .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
           normal = normalize(vGrassN);
           nonPerturbedNormal = normal;`)
@@ -566,7 +567,66 @@ export function createGrass(ctx, T) {
           // #9's "never black" warning reads at first glance; what #9 forbids is a
           // FLAT black shadow, not a dark root. Widening the ramp is the single
           // biggest lever we own on both distinct-colour count and local contrast.
-          diffuseColor.rgb *= mix(0.26, 1.38, smoothstep(0.0, 0.62, vBladeH));
+          // ------------------------------------------------------------------
+          // ...BUT ONLY AT A DISTANCE. THE RAMP IS A DEPTH CUE AND IT HAS TO
+          // FALL OFF TOWARD THE LENS, WHICH IS THE OPPOSITE OF WHAT IT DID.
+          //
+          // The guardrail is mean |horizontal luminance step| = TOTAL VARIATION per row,
+          // i.e. (number of light/dark alternations) x (their amplitude). Note what
+          // that rules out: softening a silhouette cannot move it at all, because a
+          // monotone ramp has exactly the same total variation as the step it
+          // replaced. Only amplitude or alternation count can.
+          //
+          // Measured on the bottom third of the 320x180 buffer (tools/_edgeband.py):
+          //
+          //                          std   edge  edge/std
+          //   ours creature_portrait 30.5  13.51    0.44
+          //   ours interaction_feed  33.5  18.03    0.54
+          //   pw_15                  43.4   9.12    0.21
+          //   pw_11                  61.3  10.63    0.17
+          //   pw_13                  47.7   6.28    0.13
+          //
+          // Real Palworld foregrounds carry MORE luminance spread than ours (std
+          // 43-61 against our 26-34) and roughly HALF the local contrast, so the
+          // excess is NOT amplitude and flattening the carpet globally is the wrong
+          // instinct -- it walks the spread further below the plates. What we have
+          // three to four times too much of is ALTERNATIONS, and they are all in the
+          // near field: tiling creature_portrait 6x8, our bottom two rows run
+          // 11.3-19.4 against pw_15's 5.1-14.1 while our top row runs 2.1-6.3
+          // against its 2.0-15.7. Every bit of detail in the frame is crammed into
+          // one plane a metre from the lens.
+          //
+          // So the ramp keeps its full 5.3x span where it buys structure -- past
+          // ~9 m, where a tuft is a few pixels and the ramp reads as carpet texture
+          // -- and compresses toward its own mean as the blade approaches the lens,
+          // where the same 5.3x is a per-blade square wave several pixels wide. That
+          // is reference #7's aerial perspective run in the direction nobody applies
+          // it: the near plane is the one that has to stop shouting, because it is
+          // the only plane with the pixels to shout with.
+          //
+          // Compressing toward 0.99 rather than the ramp's 1.032 mean is deliberate:
+          // the tone curve is concave, so pulling a dark/bright pair together raises
+          // the mean of the OUTPUT even when the mean of the input albedo is held,
+          // and creature_portrait's ground/sky ratio sits 0.4% under a hard ceiling.
+          //
+          // THREE CHEAPER-LOOKING KNOBS THAT ARE WORSE, ALL MEASURED, DO NOT RE-TRY:
+          //
+          //  * Narrowing the ramp GLOBALLY to 0.58-1.24 (same 1.032 mean, span 5.3x ->
+          //    2.15x) gets 10.26 -> 9.16 / 10.56 -> 9.81, less than this line, AND it
+          //    lifts creature_portrait's ground/sky from 0.9586 to 0.9625, straight
+          //    through the 0.96 ceiling. It also spends the far carpet's structure,
+          //    which is the only place the ramp was ever earning anything.
+          //  * A second, harder compression under 2.6 m (+0.18 over smoothstep(2.6,
+          //    0.4, vBladeD)) on top of this one: 8.54 -> 8.51 / 9.44 -> 9.44 / 7.08 ->
+          //    7.07. Nothing. By 2.6 m this term is already at 0.54 of its 0.62 and
+          //    what is left of a blade's contrast that close is silhouette, not ramp.
+          //  * Halving the blade normal's tilt off world up (0.40 -> 0.16 in
+          //    defaultnormal_vertex above), on the theory that per-blade yaw makes
+          //    per-blade N.L and therefore per-blade luminance: 9.16 -> 8.95 /
+          //    9.81 -> 9.80. Real but tiny, and it brightens the carpet ~6% because the
+          //    mean normal stands up, which costs more on the ratio than it buys here.
+          float ramp_ = mix(0.26, 1.38, smoothstep(0.0, 0.62, vBladeH));
+          diffuseColor.rgb *= mix(ramp_, 0.99, 0.62 * smoothstep(9.0, 1.0, vBladeD));
           // ------------------------------------------------------------------
           // AND A SECOND RAMP, IN WORLD METRES RATHER THAN BLADE FRACTIONS.
           //
@@ -726,8 +786,47 @@ export function createGrass(ctx, T) {
           // as far as that goes before it sparkles, and it is worth taking: this and
           // the root-to-tip ramp are the two terms that turn a field of instanced
           // cards into something that measures like a carpet.
-          const v = 0.70 + 0.60 * h3;
+          // The same near-field falloff the root ramp gets in the fragment shader, for
+          // the same measured reason: this is the second white-noise luminance term in
+          // the carpet, and at 41 tufts/m^2 two neighbouring tufts land in neighbouring
+          // pixels with up to a 1.86x step between them. Lerping toward 1.0 leaves the
+          // MEAN untouched (E[v] = 1.0 either way), so it costs nothing on the
+          // ground/sky ratio that both close shots are pinned against.
+          const nearT = smoothstep(9, 1, d);
+          const v = lerp(0.70 + 0.60 * h3, 1.0, 0.55 * nearT);
           col.multiplyScalar(v);
+          // ------------------------------------------------------------------
+          // TWO WAYS OF PUTTING THAT VARIETY BACK, BOTH MEASURED, BOTH WORSE.
+          //
+          // (a) HUE JITTER AT CONSTANT LUMINANCE. The guardrail is luminance-only, so
+          //     per-tuft warm/cool variation at fixed luma ought to be free detail and
+          //     free colour bins. Tried: lerp toward GRASS_PAL.dry / .shade on a fresh
+          //     hash, renormalised back to the pre-lerp luma so the albedo's luminance
+          //     was held exactly.
+          //         edge      8.54 -> 8.63 / 9.44 -> 9.53 / 7.08 -> 7.22
+          //         colors     714 -> 699  /  658 -> 649  /  517 -> 517
+          //     Both numbers moved the WRONG way. Constant luminance in linear albedo
+          //     is not constant luminance on screen -- the tone curve runs per channel,
+          //     so a warm tuft and a cool tuft at the same linear luma land at
+          //     different output luma and the alternation comes straight back. And the
+          //     colour count fell rather than rose: the hues being lerped toward are
+          //     already in GRASS_PAL and quantise into bins the carpet occupies anyway.
+          //
+          // (b) MOVING THE VALUE SPREAD ONTO A LOW-FREQUENCY FIELD. Replacing the h3
+          //     hash with clamp(0.5 + fbm(x*0.42, z*0.42) * 1.45) -- same 0.70-1.30
+          //     range, ~2.4 m patches instead of per-tuft -- is directionally right and
+          //     worth -0.25 / -0.34 / -0.34 on its own. Widening it to 0.58-1.42 to
+          //     chase the plates' much larger foreground std buys more (-0.60 / -0.75
+          //     / -0.66 combined with the ramp falloff). It is still not usable:
+          //     a low-frequency field means each camera sits on ONE patch, so ground
+          //     luminance stops being an average and becomes a sample. Overshoulder
+          //     landed on a dark patch (ratio 0.65 -> 0.63, hard on the floor) while
+          //     creature_portrait landed on a bright one (0.96 -> 0.98, through the
+          //     ceiling) in the SAME build, and the colour count fell 539 -> 502
+          //     because one framing now spans a narrow slice of the field's range.
+          //     Any patch large enough to help is large enough to make the two-sided
+          //     ratio band a lottery. The carpet's mean value has to stay stationary.
+          // ------------------------------------------------------------------
           // ------------------------------------------------------------------
           // AERIAL PERSPECTIVE HAS TO START AT YOUR FEET.
           //
@@ -1012,6 +1111,13 @@ function frondClump(rng, n, len, wid, tilt0, arc, hexes) {
       // push tips 51% over their authored albedo; the tone mapper then desaturated
       // them and mean frame saturation fell out of band. 1.05 keeps the ramp doing its
       // job without bleaching the tips.
+      // This ramp is NOT a local-contrast lever, unlike the visually identical one on
+      // the grass blades. Narrowing it 0.34-1.30 -> 0.48-1.14 (span 3.8x -> 2.4x, same
+      // mean) measured 9.16 -> 9.11 on creature_portrait and 9.81 -> 9.77 on
+      // interaction_feed, i.e. noise, while costing 6 and 5 distinct colours. A frond
+      // is one to three pixels wide on the 320x180 buffer the instrument samples, so
+      // whatever contrast it carries is averaged away before it is measured; the grass
+      // blades are five to ten pixels wide at the same distance and are not.
       const v = lerp(0.34, 1.30, clamp(p.getY(k) / top, 0, 1));
       arr[k * 3] = base.r * v; arr[k * 3 + 1] = base.g * v; arr[k * 3 + 2] = base.b * v;
     }
@@ -1480,6 +1586,29 @@ export function createGroundClutter(ctx, T) {
               // quantise into two or three of the instrument's colour bins and measure
               // like one painted mass; the spread below is what turns them into a
               // variegated carpet without reaching for hues outside the range.
+              // NO NEAR-FIELD FALLOFF ON THIS TERM -- MEASURED NULL, DO NOT RE-TRY.
+              //
+              // The grass carpet's two white-noise luminance terms both fall off toward
+              // the lens (see createGrass) and between them they are worth 1.4 / 0.9 of
+              // the local-contrast guardrail on the two close shots. Ablating the two
+              // vegetation fields separately against the r16 build says why this one is
+              // not the same case -- what each field owns of `edge`:
+              //
+              //                        blade carpet   clutter   everything else
+              //   creature_portrait        4.86         0.86          4.54
+              //   interaction_feed         3.43         1.68          5.45
+              //   overshoulder_meadow      2.89         1.05          4.03
+              //
+              // The clutter owns a real share, and half of interaction_feed's. But
+              // running the identical `lerp(v, 0.99, 0.55 * smoothstep(9, 1, d))` over
+              // it moved the guardrail by 0.01 / 0.01 / 0.00 -- nothing. The difference
+              // is spatial frequency, not amplitude: a clump is 0.5-1.2 m across and
+              // there is roughly one per square metre, so its value jitter is ALREADY
+              // low-frequency at the scale the instrument samples, where the carpet
+              // puts 41 tufts in the same square metre. The clutter's share of `edge`
+              // is geometric -- arching fronds crossing the frame in front of the
+              // carpet -- and colour cannot reach it. Removing the thicket would, and
+              // the thicket is the thing that makes the near field read as Palworld.
               const v = 0.68 + 0.62 * h3;
               col.setRGB(v * (0.86 + h4 * 0.30), v * (0.94 + h5 * 0.16), v * (0.78 + h4 * 0.30));
               // Same near-field chroma lift the grass carpet gets (see createGrass) —
