@@ -33,6 +33,11 @@ export const WEAPONS = {
     startReserve: 60,
     range: 160,
     damage: 0.15,             // stamina drained per hit (1.0 = a fresh creature)
+    // Health damage is deliberately the SLOWER of the two clocks. A woolkin has 112
+    // health and exhausts after ~7 hits; at 9 per shot it takes 13 to kill. Whoever
+    // tunes these next: keep exhaustion arriving first, or the befriending loop
+    // becomes unreachable through the weapon that is supposed to open it.
+    hpDamage: 9,
     stagger: 0.55,            // how hard one hit rocks the target, 0..1
     knockback: 1.35,          // m/s of impulse along the shot axis
 
@@ -82,6 +87,7 @@ export const WEAPONS = {
     startReserve: 120,
     range: 240,
     damage: 0.105,
+    hpDamage: 6,              // see the note on the sidearm's hpDamage
     stagger: 0.40,
     knockback: 1.0,
 

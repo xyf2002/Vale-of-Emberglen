@@ -118,6 +118,17 @@ export function createInteraction() {
     name: 'interaction',
     order: ORDER.INTERACTION,
     inventory,
+    /**
+     * Spend items from the satchel. `inventory` is exposed as a live object, but a peer
+     * mutating it directly would skip the 'inventory:change' emit and the satchel in the
+     * HUD would quietly stop matching what the player has. Everything that removes an
+     * item goes through here. Returns false if the satchel cannot cover it.
+     */
+    consume(item, n = 1) {
+      if (n <= 0 || (inventory[item] ?? 0) < n) return false;
+      setInventory(item, -n);
+      return true;
+    },
     get focus() { return focus; },
     get prompt() { return prompt; },
     /** the half-tamed creature the UI should keep a dim marker on, or null */
@@ -231,7 +242,7 @@ export function createInteraction() {
             cand = f.intended;
           } else {
             for (const cr of creatures?.list ?? []) {
-              if (cr.tamed || !free(cr)) continue;
+              if (cr.dead || cr.tamed || !free(cr)) continue;
               const d = cr.position.distanceTo(f.position);
               if (d < cd) { cd = d; cand = cr; }
             }
@@ -271,7 +282,8 @@ export function createInteraction() {
 
       // ---- taming completion --------------------------------------------
       for (const cr of creatures?.list ?? []) {
-        if (cr.tamed) continue;
+        // nothing is befriended after it is dead — the arc stops where the animal does
+        if (cr.dead || cr.tamed) continue;
         const st = taming.stateOf(cr);
         if (st.trust >= 0.999) {
           taming.complete(cr);
@@ -293,7 +305,8 @@ export function createInteraction() {
       const node = readyNode ?? resources.nearest(pp, 0.6);
       const nodeDist = node ? node.position.distanceTo(pp) : Infinity;
       let crFocus = null, crDist = Infinity;
-      if (primary && !primary.tamed) {
+      // a body is scenery: no card, no prompt, nothing to press E at
+      if (primary && !primary.dead && !primary.tamed) {
         crDist = primary.position.distanceTo(pp);
         if (crDist < PROMPT_RANGE && taming.stateOf(primary).noticed) crFocus = primary;
       }
@@ -305,7 +318,7 @@ export function createInteraction() {
       marked = null;
       let markScore = -Infinity;
       for (const cr of creatures?.list ?? []) {
-        if (!cr?.position || cr.tamed || cr === crFocus) continue;
+        if (!cr?.position || cr.dead || cr.tamed || cr === crFocus) continue;
         const st = taming.stateOf(cr);
         if (!st.noticed || (st.stage < 2 && st.trust < 0.14)) continue;
         const d = cr.position.distanceTo(pp);

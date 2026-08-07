@@ -142,6 +142,14 @@ export function createSpheres() {
   const viewV = new THREE.Vector3();   // camera forward, flattened — for the stand-off
   const sideV = new THREE.Vector3();   // camera right, flattened
   const camAt = new THREE.Vector3();   // camera world position, sampled inside the FSM
+  const carry = new THREE.Vector3();   // where the held sphere rides, body-relative
+  let holdAim = 0;                     // 0..1 ramp between the hip carry and the ready pose
+  // one reused payload for player.holdWeapon — a sphere is a one-handed carry, so the
+  // support hand is weighted out entirely and the left arm keeps its gait swing
+  const holdReq = {
+    grip: new THREE.Vector3(), fore: new THREE.Vector3(), bore: new THREE.Vector3(0, 0, -1),
+    slide: 0, weight: 1, foreWeight: 0,
+  };
 
   const sizeOf = (cr) => (cr?.stats?.size ?? cr?.def?.size ?? 0.9);
   /** the creature's trust as BOTH systems see it — Taming keeps its own copy in _tame */
@@ -157,7 +165,8 @@ export function createSpheres() {
   function pickTarget(from, dir) {
     let best = null, bestScore = Infinity;
     for (const cr of creatures?.list ?? []) {
-      if (!cr?.position || cr.tamed || cr._sphere?.busy) continue;
+      // a body is not a target: no aim assist, no odds readout, no catch
+      if (!cr?.position || cr.dead || cr.tamed || cr._sphere?.busy) continue;
       centreOf(cr, tv).sub(from);
       const d = tv.length();
       if (d > AIM_RANGE || d < 0.4) continue;
@@ -435,7 +444,7 @@ export function createSpheres() {
           // contact
           let hit = null;
           for (const cr of creatures?.list ?? []) {
-            if (!cr?.position || cr.tamed || cr._sphere?.busy) continue;
+            if (!cr?.position || cr.dead || cr.tamed || cr._sphere?.busy) continue;
             centreOf(cr, tv2);
             const r = cr === s.target ? 0.40 + sizeOf(cr) * 0.65 : 0.24 + sizeOf(cr) * 0.48;
             if (s.pos.distanceToSquared(tv2) < r * r) { hit = cr; break; }
@@ -702,6 +711,22 @@ export function createSpheres() {
   // deliberately separate streams — see the determinism note in the header
   let rollRng, fxRng, spinRng;
 
+  /**
+   * Can the traveller pay for a throw? Charged at the PRESS, not at the launch, so the
+   * wind-up animation only ever plays for a throw that is actually going to happen —
+   * charging at launch means a sphere that visibly leaves the hand and then does not.
+   */
+  function affordThrow(c) {
+    const vitals = c.get('vitals');
+    if (!vitals) return true;
+    if (!vitals.spend('focus', vitals.costs().throwFocus)) {
+      c.get('ui')?.notify?.('Not enough focus to steady a throw.', { ttl: 2.6 });
+      return false;
+    }
+    vitals.drain('stamina', vitals.costs().throwStamina);
+    return true;
+  }
+
   const api = {
     name: 'spheres',
     order: ORDER.SPHERES,
@@ -772,13 +797,24 @@ export function createSpheres() {
       }
 
       // ---- throw --------------------------------------------------------
-      if (ready && count > 0 && windup <= 0 && input?.justPressed?.('throw') && freeSlot()) {
+      // A throw costs FOCUS, and focus is the one meter that can refuse an action: the
+      // bond is a thing the traveller does with their attention, and a blue bar that
+      // only ever goes down decoratively teaches nothing. Stamina is drained too but
+      // never blocks — being tired should slow the loop, not stop it.
+      if (ready && count > 0 && windup <= 0 && input?.justPressed?.('throw') && freeSlot()
+        && affordThrow(c)) {
         // freeze the intent at the press so the throw is the shot the player took
         resolveAim(true);
         hasAim = true;
         pending = { creature: aimCreature, point: aimPt.clone() };
         windup = T.windup;
-        player?.playGesture?.('offer');
+        // A THROW, not the feeding gesture. This used to play 'offer' — the slow palm-up
+        // reach a berry is held out with — so a sphere left the hand while the arm was
+        // still extending politely forward, which is the "weird" the owner reported.
+        // player/Animator.js's 'throw' releases at 0.17 s, which is exactly T.windup: the
+        // ball leaves the hand on the frame the arm reaches full extension. Move either
+        // number and the other has to move with it.
+        player?.playGesture?.('throw');
       }
       if (windup > 0) {
         windup -= dt;
@@ -786,16 +822,52 @@ export function createSpheres() {
       }
 
       // ---- the one in your hand ------------------------------------------
+      // The hand is IK'd ONTO the sphere, not the other way round. Before this, the
+      // sphere was parked at whatever world point the locomotion swing happened to put
+      // the wrist at, so a walking traveller waved a sphere around at arm's length like
+      // a lantern. Now the carry point is body-relative and steady, the arm reaches for
+      // it (one hand — the left keeps swinging), and the sphere sits in the palm.
+      //
+      // Suppressed during the wind-up: the throw animation owns the arm for those 0.17 s
+      // and an IK call would fight it to a standstill halfway through the cock-back.
       handT = Math.max(0, handT - dt);
       const showHeld = equipped && count > 0 && handT <= 0;
       held.root.visible = showHeld;
       if (showHeld && player) {
-        throwOrigin(tv);
-        held.root.position.copy(tv);
-        held.root.scale.setScalar(clamp(loadout?.swapProgress?.() ?? 1, 0.05, 1));
+        const by = player.bodyYaw ?? 0;
+        const raise = clamp(loadout?.swapProgress?.() ?? 1, 0, 1);
+        // carried at the hip; brought up in front of the chest while aiming
+        const a = aiming ? 1 : 0;
+        holdAim = holdAim + (a - holdAim) * Math.min(1, dt * 9);
+        const up = 1.10 + holdAim * 0.26;
+        const rightOff = 0.30 - holdAim * 0.04;
+        const fwdOff = 0.16 + holdAim * 0.20;
+        carry.set(
+          player.position.x + Math.cos(by) * rightOff - Math.sin(by) * fwdOff,
+          player.position.y + up - (1 - raise) * 0.3,
+          player.position.z - Math.sin(by) * rightOff - Math.cos(by) * fwdOff);
+
+        if (windup <= 0) {
+          // the wrist goes a little above the sphere so it rests in the palm, not in the
+          // middle of the fist (the hand mesh hangs ~3.5 cm below its own origin)
+          holdReq.grip.copy(carry).setY(carry.y + 0.045);
+          holdReq.fore.copy(holdReq.grip);
+          holdReq.bore.set(-Math.sin(by), 0, -Math.cos(by));
+          player.holdWeapon?.(dt, holdReq);
+          held.root.position.copy(carry);
+        } else {
+          // mid-throw the sphere rides the actual hand, which is whipping forward
+          throwOrigin(tv);
+          held.root.position.copy(tv);
+        }
+        held.root.scale.setScalar(raise);
         held.shell.rotation.y += dt * 0.5;
         held.shell.rotation.z = Math.sin(c.elapsed * 1.3) * 0.05;
         held.setGlow(0.05 + (aimCreature ? aimChance * 0.25 : 0));
+      } else if (player && holdAim > 0) {
+        // nothing in hand any more: let the arm fall back to the gait swing
+        holdAim = 0;
+        player.holdWeapon?.(dt, null);
       }
 
       // ---- the spheres themselves ----------------------------------------

@@ -105,6 +105,37 @@ const BUILDERS = {
     ],
     eyes: [[42.5, 46, 2.9], [57.5, 46, 2.9]],
   }),
+  // two clean circles of very different size joined at a waist: the head is the bigger
+  // one. Read as ink, that proportion is the whole identity — woolkin is also round, but
+  // its outline is scalloped and its mass is uniform.
+  pumpkit: () => ({
+    body: [
+      nub(41, 80, 4.4, 12), nub(59, 80, 4.4, 12),
+      taper(64, 66, 84, 42, 4.5, -0.55), taper(84, 42, 79, 25, 3.0, 0.5),
+      egg(50, 68, 21, 20, 0.05),
+      egg(50, 36, 28, 27, 0.0),
+      taper(33, 21, 26, 3, 7, 0.15), taper(67, 21, 74, 3, 7, -0.15),
+    ],
+    eyes: [[42, 38, 3.4], [58, 38, 3.4]],
+  }),
+  // HONEST LIMIT, worth knowing before someone "fixes" this icon. Shalehound's identifying
+  // feature is a pale keratin shield across its chest, and this is a one-ink cutout drawn
+  // head-on: the shield sits INSIDE the body outline, so the union of these paths cannot
+  // show it. Its 100px ink identity is what is left — four legs, an upright head and one
+  // straight blade off the back, against five creatures whose every edge is an arc. The
+  // shield is a value read, not an outline read. An earlier version of this icon drew a
+  // dorsal slab above the head; that plate no longer exists on the creature (see the long
+  // note in species.js) and the icon must not promise it.
+  shalehound: () => ({
+    body: [
+      nub(31, 76, 5.2, 16), nub(45, 78, 5.0, 14), nub(55, 78, 5.0, 14), nub(69, 76, 5.2, 16),
+      taper(26, 62, 9, 34, 4, 0.18),
+      egg(50, 64, 29, 20, 0.0),
+      egg(50, 41, 19, 20, 0.04),
+      taper(38, 27, 31, 13, 5.5, 0.2), taper(62, 27, 69, 13, 5.5, -0.2),
+    ],
+    eyes: [[44, 43, 3.0], [56, 43, 3.0]],
+  }),
 };
 
 /** unknown species still get a plausible pal: egg body + two big appendages */

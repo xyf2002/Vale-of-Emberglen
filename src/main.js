@@ -9,6 +9,7 @@ import { createInteraction } from './interaction/index.js';
 import { createLoadout } from './loadout/index.js';
 import { createSpheres } from './spheres/index.js';
 import { createWeapons } from './weapons/index.js';
+import { createVitals } from './vitals/index.js';
 import { createUI } from './ui/index.js';
 import { createAudio } from './audio/index.js';
 import { createPost } from './post/index.js';
@@ -36,6 +37,7 @@ game.register(createInteraction());
 game.register(createLoadout());
 game.register(createSpheres());
 game.register(createWeapons());
+game.register(createVitals());
 game.register(createUI());
 game.register(createAudio());
 game.register(createPost());
@@ -47,6 +49,7 @@ const BOOT_TEXT = {
   creatures: 'hatching the pals…', ai: 'teaching them to be curious…',
   interaction: 'filling your satchel…', loadout: 'checking your pockets…',
   spheres: 'winding the spheres…', weapons: 'oiling the action…',
+  vitals: 'taking your pulse…',
   ui: 'inking the journal…',
   audio: 'tuning the wind…', post: 'grading the light…', ready: 'ready',
 };

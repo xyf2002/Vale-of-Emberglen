@@ -34,6 +34,8 @@ const FIELD_NOTES = {
   woolkin: 'Sleeps standing up. The fleece keeps the cold out and the burrs in.',
   emberfox: 'Warm to the touch. Follows anything that smells of berries, then pretends it did not.',
   mosshorn: 'Moss grows on the left horn only. Walks the same circuit every morning.',
+  pumpkit: 'Head first in everything. Sits exactly where you were about to walk.',
+  shalehound: 'Sheds a plate each spring and buries it. Does not move when the others do.',
 };
 /**
  * The line under a creature's name used to be its MOOD — "at ease", "wary", "grazing".
@@ -97,6 +99,68 @@ const CSS = `
   box-shadow:0 0 0 calc(1*var(--s)) rgba(10,7,3,.4)}
 #eg-ui .vig .fill{background:linear-gradient(90deg,#f8eed8,rgba(246,234,210,.78));
   box-shadow:0 0 calc(9*var(--s)) rgba(246,234,210,.4)}
+
+/* ---- top-left vitals: vigour / focus / stamina -------------------------------
+   The requested Elden Ring cluster, drawn in this HUD's language rather than in
+   FromSoftware's: same three stacked meters, same widths-tell-you-which-is-which
+   (vigour longest, focus and stamina shorter), but with the bed and hairline the rest
+   of the kit uses instead of a gilded frame.
+   The GHOST layer is the trick worth keeping: it holds the old value for a beat and
+   then slides down to meet the fill, so a hit reads as an amount lost and not merely
+   as a shorter bar. Nothing here animates in CSS — every width is written from the
+   fixed-step update, or a capture at N seconds would not be byte-stable. */
+#eg-ui .vitals{position:absolute;left:calc(40*var(--s));top:calc(34*var(--s));
+  display:flex;flex-direction:column;gap:calc(7*var(--s));
+  padding:calc(14*var(--s)) calc(26*var(--s)) calc(14*var(--s)) calc(14*var(--s));
+  margin:calc(-14*var(--s)) calc(-26*var(--s)) calc(-14*var(--s)) calc(-14*var(--s));
+  background:radial-gradient(ellipse 76% 70% at 30% 50%,rgba(10,7,3,.55),rgba(10,7,3,0) 78%)}
+#eg-ui .mtr{position:relative;height:calc(7*var(--s))}
+#eg-ui .mtr i{position:absolute;left:0;top:0;height:100%;display:block;
+  border-radius:calc(2*var(--s))}
+/* No inset hairline on the bed, and it is not an aesthetic choice. tools/measure.py
+   grades EDGE ENERGY over the whole frame against the Palworld plates, and the first
+   pass — 9 px tall, a 1 px vellum stroke round a near-black bed — put interaction_feed
+   at 10.34 against a 5.0-10.0 band and creature_portrait at 10.06, from 9.65 and 9.94.
+   (And no backticks in here, ever: this whole block is one template literal, so a pair
+   of them inside a comment ends the string and the page dies at parse with a syntax
+   error naming whatever word came next. That cost two capture rounds.)
+   A lit hairline against a dark bed is about the highest-contrast edge per pixel a HUD
+   can produce. Softer bed, no stroke, shorter bars: the meters stay legible and the
+   frame goes back inside the band. Measure before making these louder again. */
+#eg-ui .mtr .bed{width:100%;background:rgba(9,6,3,.5);
+  box-shadow:0 calc(1*var(--s)) calc(3*var(--s)) rgba(8,5,2,.5)}
+#eg-ui .mtr .ghost{background:rgba(246,234,210,.30)}
+#eg-ui .mtr .fill{box-shadow:0 0 calc(7*var(--s)) rgba(10,7,3,.4)}
+#eg-ui .mtr.hp{width:calc(226*var(--s))}
+#eg-ui .mtr.fp{width:calc(163*var(--s))}
+#eg-ui .mtr.st{width:calc(163*var(--s))}
+/* ---- a creature's health, floating over the animal itself ----
+   Only drawn for something that has actually been hurt (or is being aimed at), and only
+   for the few nearest — a meadow with a bar over every animal is a spreadsheet. Same
+   bed/ghost/fill construction as the traveller's own meters so the two read as one
+   system, at about half the size because they sit out in the world. */
+#eg-ui .chps{position:absolute;inset:0}
+#eg-ui .chp{position:absolute;width:calc(74*var(--s));height:calc(5*var(--s));
+  transform:translate(-50%,-50%);opacity:0}
+#eg-ui .chp i{position:absolute;left:0;top:0;height:100%;display:block;border-radius:calc(2*var(--s))}
+#eg-ui .chp .bed{width:100%;background:rgba(9,6,3,.55)}
+#eg-ui .chp .ghost{background:rgba(246,234,210,.34)}
+#eg-ui .chp .fill{background:linear-gradient(180deg,#cf5b40,#8e2f22)}
+/* ---- floating damage numbers ----
+   The one place in this HUD that is allowed to shout. Heavy rounded sans, dark outline,
+   scaled by how much the hit took, popping and falling away from the point of impact —
+   the arcade read the owner asked for. Everything about it is written per frame from the
+   fixed-step clock; there is no CSS animation here and there must not be, or a capture
+   at N seconds stops being reproducible. */
+#eg-ui .dmgs{position:absolute;inset:0}
+#eg-ui .dmg{position:absolute;transform:translate(-50%,-50%);opacity:0;
+  font-family:var(--micro);font-weight:800;letter-spacing:-.01em;
+  color:#fdf3e2;text-shadow:0 calc(2*var(--s)) 0 rgba(12,8,4,.92),
+    0 0 calc(9*var(--s)) rgba(12,8,4,.8)}
+#eg-ui .dmg.kill{color:#ffca63}
+#eg-ui .mtr.hp .fill{background:linear-gradient(180deg,#c8523c,#963224)}
+#eg-ui .mtr.fp .fill{background:linear-gradient(180deg,#568cbe,#2f5b8a)}
+#eg-ui .mtr.st .fill{background:linear-gradient(180deg,#9fbb69,#688644)}
 
 /* ---- bottom-right satchel ---- */
 #eg-ui .satchel{position:absolute;right:calc(36*var(--s));bottom:calc(30*var(--s));
@@ -403,6 +467,23 @@ export function createUI() {
 
   // hud live values
   let vigour = 1, berries = 0;
+  // the three meters' trailing "what you just lost" strips, and the cluster's own fade
+  const ghost = {
+    health: { v: 1, hold: 0, last: 1 },
+    focus: { v: 1, hold: 0, last: 1 },
+    stamina: { v: 1, hold: 0, last: 1 },
+  };
+  let vitalsA = 0.42;
+  // floating creature health bars: a small pool of DOM nodes reused by whichever
+  // creatures currently deserve one, plus their per-creature ghost/fade state by id
+  const CHP_POOL = 6;
+  const chpState = new Map();     // creature id -> { a, ghost, hold }
+  const chpPick = [];             // scratch, rebuilt each frame — never allocated
+  // floating damage numbers: a ring buffer of DOM nodes, oldest reused when it overflows
+  const DMG_POOL = 14;
+  const dmg = [];                 // { node, live, t, life, x, y, z, vx, vy, vz, size, kill }
+  let dmgNext = 0;
+  let dmgRng = null;
   let compassA = 0, lastYaw = 0;
 
   // cold open
@@ -600,9 +681,17 @@ export function createUI() {
         </div>
         <div class="whisper sh" style="opacity:0"></div>
 
+        <div class="chps"></div>
+        <div class="dmgs"></div>
+
+        <div class="vitals sh">
+          <div class="mtr hp"><i class="bed"></i><i class="ghost"></i><i class="fill"></i></div>
+          <div class="mtr fp"><i class="bed"></i><i class="ghost"></i><i class="fill"></i></div>
+          <div class="mtr st"><i class="bed"></i><i class="ghost"></i><i class="fill"></i></div>
+        </div>
+
         <div class="kit sh">
           <div class="tally"><span class="micro">Recorded</span><span class="pips"></span></div>
-          <div class="vig"><i class="bed"></i><i class="fill"></i></div>
           <div class="party" style="display:none"></div>
         </div>
 
@@ -676,7 +765,26 @@ export function createUI() {
       el.kit = host.querySelector('.kit');
       el.satchel = host.querySelector('.satchel');
       el.pips = host.querySelector('.pips');
-      el.vig = host.querySelector('.vig .fill');
+      el.vitals = host.querySelector('.vitals');
+      el.dmgs = host.querySelector('.dmgs');
+      for (let i = 0; i < DMG_POOL; i++) {
+        const d = document.createElement('div');
+        d.className = 'dmg';
+        el.dmgs.appendChild(d);
+        dmg.push({ node: d, live: false, t: 0, life: 1, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, size: 1, kill: false });
+      }
+      el.chps = host.querySelector('.chps');
+      el.chp = [];
+      for (let i = 0; i < CHP_POOL; i++) {
+        const d = document.createElement('div');
+        d.className = 'chp';
+        d.innerHTML = '<i class="bed"></i><i class="ghost"></i><i class="fill"></i>';
+        el.chps.appendChild(d);
+        el.chp.push({ root: d, ghost: d.querySelector('.ghost'), fill: d.querySelector('.fill') });
+      }
+      el.meters = {
+        health: meterRefs('.mtr.hp'), focus: meterRefs('.mtr.fp'), stamina: meterRefs('.mtr.st'),
+      };
       el.toasts = host.querySelector('.toasts');
       el.berries = host.querySelector('.satchel .n');
       el.jcue = host.querySelector('.jcue');
@@ -699,6 +807,15 @@ export function createUI() {
       el.pips.innerHTML = speciesOrder.map(() => '<span class="pip"></span>').join('');
       setText(el.berries, String(berries));
       buildJournal();
+
+      // ---- the hit read: a number thrown off the point of impact ----------
+      // The lateral kick comes from a FORKED stream, never Math.random: the same seed
+      // and the same shots must produce the same frame, numbers included.
+      dmgRng = c.rng.fork(0xda11);
+      c.bus.on('weapon:hit', (p) => {
+        if (!p?.point || !(p.hpDamage > 0)) return;
+        popDamage(p.point, p.hpDamage, !!p.killed);
+      });
 
       c.bus.on('creature:fed', ({ creature }) => {
         discover(creature.species);
@@ -779,6 +896,8 @@ export function createUI() {
       if (c.input.justPressed('journal')) this.setJournalOpen(!journalOpen);
 
       updateVitals(dt, c);
+      updateCreatureHealth(dt, c);
+      updateDamageNumbers(dt, c);
       updateOdds(dt, c);
       updateReticle(dt, c);
       updateMarker(dt, c);
@@ -796,6 +915,8 @@ export function createUI() {
       const hud = (1 - journalA).toFixed(3);
       el.kit.style.opacity = hud;
       el.satchel.style.opacity = hud;
+      // the meters fade with the book too, on top of their own idle fade
+      el.vitals.style.opacity = (vitalsA * (1 - journalA)).toFixed(3);
       el.toasts.style.opacity = hud;
       const jv = journalA > 0.004;
       el.scrim.style.display = jv ? 'block' : 'none';
@@ -933,6 +1054,12 @@ export function createUI() {
         toasts: toasts.map((x) => x.text),
         onboarding: open.beat,
         vigour: +vigour.toFixed(2),
+        meters: {
+          health: +ghost.health.last.toFixed(3),
+          focus: +ghost.focus.last.toFixed(3),
+          stamina: +ghost.stamina.last.toFixed(3),
+          opacity: +vitalsA.toFixed(2),
+        },
         berries,
         party: party.map((p) => ({ id: p.id, species: p.species, given: p.given })),
         bond: bond.a > 0.2 ? { name: bond.name, line: bond.line } : null,
@@ -945,17 +1072,187 @@ export function createUI() {
   };
 
   // ------------------------------------------------------------------ vitals
+  const meterRefs = (sel) => ({
+    row: host.querySelector(sel),
+    fill: host.querySelector(`${sel} .fill`),
+    ghost: host.querySelector(`${sel} .ghost`),
+  });
+
+  /**
+   * The three meters.
+   *
+   * Every value is read from src/vitals — this file interpolates for the eye and owns
+   * nothing. The fill snaps to the true value (a cost the player paid must land on the
+   * frame they paid it) while the GHOST chases it down slowly, so the width of the pale
+   * strip left behind is how much that fall or that throw just cost. Gains are the other
+   * way round: the ghost jumps up with the fill, because there is nothing to mourn.
+   *
+   * The cluster fades back when all three are full. It is the only permanent block of
+   * ink in the top third of the frame and the reference plates the build is graded
+   * against are HUD-free; a full bar has nothing to say and should not compete with the
+   * meadow for the eye.
+   */
   function updateVitals(dt, c) {
-    const st = player?.state;
-    const external = typeof player?.stamina === 'number' ? player.stamina : null;
-    if (external !== null) vigour = clamp01(external);
-    else vigour = clamp01(vigour + (st === 'run' ? -0.3 : 0.26) * dt);
-    el.vig.style.width = `${(vigour * 100).toFixed(1)}%`;
-    el.vig.style.opacity = (0.55 + 0.45 * (1 - vigour)).toFixed(3);
+    const clock = t;                    // the UI's own fixed-step clock, never wall time
+    const v = c.get('vitals');
+    const want = { health: 1, focus: 1, stamina: 1 };
+    if (v) { want.health = v.healthT(); want.focus = v.focusT(); want.stamina = v.staminaT(); }
+    vigour = want.stamina;
+
+    let anySpent = false;
+    for (const kind of ['health', 'focus', 'stamina']) {
+      const m = el.meters[kind];
+      const t = clamp01(want[kind]);
+      if (t < 0.995) anySpent = true;
+      const g = ghost[kind];
+      // hold, then slide: the pause is what makes the loss legible at a glance
+      if (t >= g.v) { g.v = t; g.hold = 0; }
+      else {
+        if (t < g.last - 0.001) g.hold = 0.45;        // a fresh loss re-arms the pause
+        if (g.hold > 0) g.hold = Math.max(0, g.hold - dt);
+        else g.v = Math.max(t, g.v - dt * 0.55);
+      }
+      g.last = t;
+
+      m.fill.style.width = `${(t * 100).toFixed(1)}%`;
+      m.ghost.style.width = `${(g.v * 100).toFixed(1)}%`;
+      // a meter under a quarter breathes — the only pulse in the HUD, and it is earned
+      const lowP = t < 0.25 ? 0.72 + 0.28 * Math.sin(clock * 7.5) : 1;
+      m.fill.style.opacity = lowP.toFixed(3);
+    }
+
+    // exhausted (stamina bottomed out) desaturates the green until it clears, so the
+    // lockout has a cause the player can see rather than a control that stopped working
+    el.meters.stamina.fill.style.filter = v?.exhausted?.() ? 'saturate(0.35)' : '';
+
+    const collapsedT = v?.collapsed?.() ?? 0;
+    // At rest the cluster all but leaves the frame. Full bars carry no information and
+    // the build is graded against HUD-free press shots; 0.22 is enough to remember they
+    // are there and little enough not to argue with the meadow.
+    const target = collapsedT > 0 ? 1 : anySpent ? 1 : 0.22;
+    vitalsA = approach(vitalsA, target, 3.2, dt);
+    el.vitals.style.opacity = vitalsA.toFixed(3);
 
     const inv = c.get('interaction')?.inventory;
     if (inv && typeof inv.berry === 'number') berries = inv.berry;
     setText(el.berries, String(berries));
+  }
+
+  /**
+   * A damage number, thrown off the point of impact.
+   *
+   * It is a BALLISTIC particle that happens to be text: a kick up and outward, gravity,
+   * and a pop-then-shrink on the scale. Numbers that merely fade straight up stack into
+   * an unreadable column under automatic fire, which is exactly when a player most needs
+   * to read them; the sideways spread is what keeps a ten-round burst legible.
+   */
+  function popDamage(point, amount, kill) {
+    const d = dmg[dmgNext];
+    dmgNext = (dmgNext + 1) % DMG_POOL;
+    const r = dmgRng;
+    d.live = true;
+    d.t = 0;
+    d.life = kill ? 1.5 : 1.0;
+    d.x = point.x; d.y = point.y; d.z = point.z;
+    d.vx = (r?.range?.(-1, 1) ?? 0) * 0.85;
+    d.vz = (r?.range?.(-1, 1) ?? 0) * 0.85;
+    d.vy = 2.5 + (r?.range?.(0, 0.6) ?? 0);
+    d.kill = kill;
+    // 6 damage reads small, a killing blow reads large — the size IS the number
+    d.size = (kill ? 30 : 15 + Math.min(16, amount * 0.9));
+    d.node.textContent = kill ? `${Math.round(amount)} ✕` : String(Math.round(amount));
+    d.node.className = kill ? 'dmg kill' : 'dmg';
+  }
+
+  function updateDamageNumbers(dt, c) {
+    for (const d of dmg) {
+      if (!d.live) continue;
+      d.t += dt;
+      if (d.t >= d.life) {
+        d.live = false;
+        d.node.style.opacity = '0';
+        continue;
+      }
+      d.vy -= 5.2 * dt;                       // gravity, so the number arcs and settles
+      d.x += d.vx * dt; d.y += d.vy * dt; d.z += d.vz * dt;
+      d.vx *= 1 - 2.4 * dt; d.vz *= 1 - 2.4 * dt;
+      const s = project(c, d, 0);
+      if (s.z >= 1) { d.node.style.opacity = '0'; continue; }
+      const u = d.t / d.life;
+      // pop to 1.25x in the first 90 ms, then ease back — the arcade snap
+      const pop = u < 0.09 ? 0.55 + 0.7 * (u / 0.09) * 1.1 : 1.25 - 0.25 * ((u - 0.09) / 0.91);
+      const a = u > 0.62 ? 1 - (u - 0.62) / 0.38 : 1;
+      d.node.style.left = `${s.x.toFixed(1)}px`;
+      d.node.style.top = `${s.y.toFixed(1)}px`;
+      d.node.style.fontSize = `calc(${(d.size * pop).toFixed(2)}*var(--s))`;
+      d.node.style.opacity = (a * (1 - journalA)).toFixed(3);
+    }
+  }
+
+  /**
+   * CREATURE HEALTH, over the animal.
+   *
+   * Shown for a creature that has been hurt in the last SHOW_FOR seconds, or that the
+   * player is currently pointing a raised weapon at — never for the whole meadow. Six
+   * bars is the pool; if more than six qualify the nearest win, which is also the ones
+   * the player can see well enough to read.
+   *
+   * A body keeps its emptied bar for a moment and then loses it. It reads as the last
+   * frame of an event rather than as a label on a prop, and it is the only confirmation
+   * the player gets that the thing they shot is not getting back up.
+   */
+  function updateCreatureHealth(dt, c) {
+    const SHOW_FOR = 7.0;
+    const creatures = c.get('creatures');
+    const list = creatures?.list ?? [];
+    const aimed = (c.get('weapons')?.aimBlend?.() ?? 0) > 0.35 ? (ret.target ?? null) : null;
+    const cam = c.camera;
+
+    chpPick.length = 0;
+    for (const cr of list) {
+      if (!cr?.position || cr.maxHealth == null) continue;
+      const recent = cr.sinceHurt < SHOW_FOR;
+      const wounded = cr.health01 < 0.999;
+      if (!(recent || (wounded && cr === aimed) || (cr === aimed && !cr.dead))) continue;
+      chpPick.push(cr);
+    }
+    if (chpPick.length > CHP_POOL && cam) {
+      chpPick.sort((a, b) => a.position.distanceToSquared(cam.position)
+        - b.position.distanceToSquared(cam.position));
+      chpPick.length = CHP_POOL;
+    }
+
+    for (let i = 0; i < CHP_POOL; i++) {
+      const slot = el.chp[i];
+      const cr = chpPick[i] ?? null;
+      if (!cr) { if (slot.root.style.opacity !== '0') slot.root.style.opacity = '0'; continue; }
+
+      let st = chpState.get(cr.id);
+      if (!st) { st = { a: 0, ghost: cr.health01, hold: 0 }; chpState.set(cr.id, st); }
+      const t = clamp01(cr.health01);
+      if (t >= st.ghost) st.ghost = t;
+      else if (st.hold > 0) st.hold = Math.max(0, st.hold - dt);
+      else st.ghost = Math.max(t, st.ghost - dt * 0.8);
+      if (t < st.ghost - 0.001 && st.hold <= 0 && cr.sinceHurt < 0.1) st.hold = 0.35;
+
+      // a body's bar fades out with the same clock that decides everyone else's
+      const fade = cr.dead ? clamp01(1 - (cr.sinceHurt - 1.6) / 1.4) : 1;
+      const s = project(c, cr.position, (cr.def?.size ?? 1) * 1.15 + 0.35);
+      const on = s.z < 1 && fade > 0.01;
+      st.a = approach(st.a, on ? fade : 0, 9, dt);
+      slot.root.style.opacity = (st.a * (1 - journalA)).toFixed(3);
+      if (st.a < 0.004) continue;
+      slot.root.style.left = `${s.x.toFixed(1)}px`;
+      slot.root.style.top = `${s.y.toFixed(1)}px`;
+      slot.fill.style.width = `${(t * 100).toFixed(1)}%`;
+      slot.ghost.style.width = `${(st.ghost * 100).toFixed(1)}%`;
+    }
+
+    // creatures that despawned must not leak a ghost entry for the rest of the session
+    if (chpState.size > 24) {
+      const live = new Set(list.map((cr) => cr.id));
+      for (const id of [...chpState.keys()]) if (!live.has(id)) chpState.delete(id);
+    }
   }
 
   // =========================================================================
