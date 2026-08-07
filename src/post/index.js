@@ -223,8 +223,15 @@ export function createPost() {
     // back, or the character -- who is a subject, not scenery -- turns to mush.
     // On a portrait lens the thin-lens near term already owns everything closer than
     // the creature, so the ramp is pulled in to stay out of its way.
+    // 4.2 m was NOT short. The wide camera orbits at 2.30 m (2.95 sprinting) and the
+    // player's back sits ~2.0-2.7 m from the lens, so a ramp that only reaches full
+    // sharpness at 4.2 m left the character at 1 - smoothstep(0.35, 4.2, 2.1) = 0.57 of
+    // a full near disc — at 1080p that disc is 14 px, so the subject of every frame was
+    // being convolved with an 8 px blur. That is the "the character is mushy" report,
+    // and it is exactly the failure the paragraph above warns against. 1.5 m keeps the
+    // grass brushing the lens soft and hands the player's own body back sharp.
     hz.uNearIn.value = 0.35;
-    hz.uNearOut.value = want ? 1.1 : 4.2;
+    hz.uNearOut.value = want ? 1.1 : 1.5;
 
     // Wide-lens far plane. On a portrait the thin lens already owns everything behind
     // the creature, so this is switched off there rather than stacked on top of it.

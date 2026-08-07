@@ -54,13 +54,16 @@ const SHOT = ({ px, py, pz, dx, dz, dy, dist, aimY, fov }) => {
 };
 
 const base = await page.evaluate(SETUP);
+// place(x, z, 0) faces the rig down -z, so the camera goes to NEGATIVE z to see the
+// face. (These were the other way round until the avatar's torso was turned to match
+// the rig — the probe was photographing the back and calling it 'front'.)
 const shots = [
-  ['front', { dx: 0, dz: 1, dy: 1.55, dist: 1.15, aimY: 1.52, fov: 34 }],
-  ['threequarter', { dx: 0.72, dz: 0.69, dy: 1.50, dist: 1.30, aimY: 1.48, fov: 36 }],
-  ['behind', { dx: 0, dz: -1, dy: 1.62, dist: 1.60, aimY: 1.40, fov: 40 }],
-  ['gameplay_behind', { dx: 0.28, dz: -0.96, dy: 1.75, dist: 3.20, aimY: 1.15, fov: 55 }],
-  ['hero_low', { dx: 0.55, dz: 0.83, dy: 0.95, dist: 2.20, aimY: 1.25, fov: 42 }],
-  ['nape', { dx: 0.12, dz: -0.99, dy: 1.78, dist: 0.85, aimY: 1.58, fov: 32 }],
+  ['front', { dx: 0, dz: -1, dy: 1.55, dist: 1.15, aimY: 1.52, fov: 34 }],
+  ['threequarter', { dx: 0.72, dz: -0.69, dy: 1.50, dist: 1.30, aimY: 1.48, fov: 36 }],
+  ['behind', { dx: 0, dz: 1, dy: 1.62, dist: 1.60, aimY: 1.40, fov: 40 }],
+  ['gameplay_behind', { dx: 0.28, dz: 0.96, dy: 1.75, dist: 3.20, aimY: 1.15, fov: 55 }],
+  ['hero_low', { dx: 0.55, dz: -0.83, dy: 0.95, dist: 2.20, aimY: 1.25, fov: 42 }],
+  ['nape', { dx: 0.12, dz: 0.99, dy: 1.78, dist: 0.85, aimY: 1.58, fov: 32 }],
 ];
 for (const [name, cfg] of shots) {
   const stats = await page.evaluate(SHOT, { ...base, ...cfg });
