@@ -60,10 +60,14 @@ code{background:#ffffff12;padding:1px 6px;border-radius:4px;font-size:12.5px}
 <main>
   <div class="bar">
     <div class="stat"><div class="k">Round</div><div class="v">r18nohud</div></div>
-    <div class="stat"><div class="k">State</div><div class="v" style="font-size:15px">r17grass put the last two failing shots back in band; all six now pass every guardrail (group 7.38, portrait 8.54, dusk 7.60, feed 9.44, overshoulder 7.08, vista 6.45).
+    <div class="stat"><div class="k">State</div><div class="v" style="font-size:15px">r18 fixed the measurement. The 0% pick rate across r08-r16 was taken through an information leak — our frames carried the HUD and the real plates did not — so it said nothing about rendering. A matched HUD/no-HUD pair captured off a clean worktree put the overlay's contribution at ~2% of edge and ~52 colours, the pack was rebuilt HUD-free, and a fresh critic re-ran it.
 
-r18 is the round that fixes the measurement rather than the art. Every pick-rate number this project has published was taken through an information leak — our frames carried the HUD, the real plates did not — so the headline 0% says nothing about rendering. A matched HUD/no-HUD pair has now been captured off a clean worktree, the overlay's contribution measured (edge ~2%, colors ~52), and the blind pack rebuilt from the HUD-free frames. A fresh critic is judging it now.</div></div>
-    <div class="stat"><div class="k">Real-game pick rate</div><div class="v"><span class="meter"><i style="width:NaN%"></i></span><b>NaN%</b></div></div>
+The answer is still 0 of 5, now at 99-100% confidence, and the reasons are finally specific enough to build against: no surface texture at any spatial frequency, no cast shadows or AO, one Lambert response for the whole world, and a colourless light rig compressed into the mid-tones. Our ground band carries 60% of the reference's dynamic range and a quarter of its shadow coverage.
+
+r19 is three builders in isolated worktrees, one per gap, measured separately before any of it is merged — r13 is the reason they are not all pushing the same two-sided bands in one tree.
+
+The pack itself still leaks twice more: our five frames share assets across folders, and they are one meadow where the reference is five biomes. Next pack goes one folder per critic.</div></div>
+    <div class="stat"><div class="k">Real-game pick rate</div><div class="v"><span class="meter"><i style="width:0%"></i></span><b>0%</b></div></div>
     <div class="stat"><div class="k">Improvements landed</div><div class="v">73</div></div>
     <div class="stat"><div class="k">Open gaps</div><div class="v">5</div></div>
   </div>
@@ -92,19 +96,26 @@ r18 is the round that fixes the measurement rather than the art. Every pick-rate
   <h3 style="margin-top:30px">Rounds</h3>
   
   <details class="round" open>
-    <summary>r18nohud — The blind A/B is re-run without the leak <span class="badge" style="--c:#e8b45c">running</span>
+    <summary>r18nohud — The blind A/B is re-run without the leak <span class="badge" style="--c:#7fd18b">complete</span>
       <span style="margin-left:auto;font-weight:400;color:var(--dim);font-size:13px">2026-08-08</span></summary>
     <div class="body">
       <div class="verdict">The r16 critic reported, unprompted, that every imitation frame carried the HUD and no real plate did — 'that settles the pick before you look at a single rendering pixel'. That retroactively invalidates the 0% pick rate across r08, r10, r11 and r16: those verdicts were measured through an information leak, not through rendering.
 
 r18hud and r18nohud were captured back-to-back off a clean detached worktree at 718e27e, so the only difference between the two rounds is the overlay and no in-flight edits from concurrent sessions are in either. The HUD is worth edge -0.06..-0.25 (mean -0.17, ~2% of the metric) and colors -22..-82 (mean -52). Both rounds pass all six shots on all bands, so the leak was never propping up a number — but the default stays HUD-on, because overshoulder_meadow drops 517 -&gt; 442 colours against a 420 floor and a silent default change would put it near the edge of its band with no art change at all. Standing rule instead: anything feeding abpack.py is captured --no-hud; anything graded against r01-r18 bands is not.
 
-The pack is out with a fresh-context critic. This is the first pick-rate number in the project's history that measures rendering.</div>
+The pack is out with a fresh-context critic. This is the first pick-rate number in the project's history that measures rendering.
+
+VERDICT: 0 of 5. The critic identified our frame correctly in every pair at 99-100% confidence — the same 0% as before, but for the first time it is a number about rendering rather than about the overlay.
+
+And the pack still leaks, twice, in ways the HUD fix did not touch. Our five frames share an avatar, a berry bush and a sheep across folders, so identifying ONE imitation frame identifies all five by asset matching with no rendering judgement at all. And the five real plates are five different biomes while ours are one meadow at three times of day, so the pack can be sorted by asking 'which set is five places and which is one' — a content-authoring fact, not a rendering one. Next pack goes out one folder per critic.
+
+The critic also flagged the A/B side assignment as suspiciously blocked (A,A,B,B,B in alphabetical order). Checked: side_for() hashes (round, shot, salt) and r19/r20 produce ABBBB and AABAB from the same code. Coincidence, not a bug.</div>
       <div class="cols">
         <div><h3>Improvements landed</h3><ul><li>r18hud / r18nohud captured back-to-back from a detached worktree at HEAD — no concurrent session's uncommitted src/ edits in either</li><li>HUD's contribution to edge and colors quantified per shot and recorded in tools/capture.mjs</li><li>Blind A/B pack rebuilt from HUD-free frames</li></ul></div>
-        <div><h3>Gaps found by critics</h3><ul><li class="dim">—</li></ul></div>
+        <div><h3>Gaps found by critics</h3><ul><li class="gap">#1 No surface texture. Not one albedo or normal doing work at any spatial frequency — 'a textured greybox with a colour pass'. Real plates carry macro (~20 m patchiness), meso (moss streaks, strata) and micro (grain) simultaneously.</li><li class="gap">#2 Nothing casts a shadow onto anything and there is no AO. Zero of the ~15 trees in vista_golden darken the ground. Berry clusters float in front of bushes rather than nestling in them.</li><li class="gap">#3 Lambert-only. One shading response for the entire world, so rock, leaf, metal helmet and fleece differ only by hue. No specular anywhere in the portrait, including on the horns.</li><li class="gap">#4 Lighting has no colour and the range is compressed into the mid-tones. No warm/cool key/fill split, achromatic fog, no bloom, no filmic roll-off. 'vista_golden contains no gold.' Night is a multiply over the day palette.</li><li class="gap">Measured: our ground band spans 76-154 (p98-p02) against the plates' 127-238, with 0.1-6.8% of ground pixels in shadow against their 3.3-37.3%.</li><li class="gap">The pack leaks by cross-folder asset identity and by scene diversity — five biomes vs one meadow.</li></ul></div>
       </div>
-      
+      <h3>Critic verdicts</h3><table><tr><th>Shot</th><th>Picked as real</th><th>Note</th></tr>
+        <tr><td>creature_group</td><td><span class="dim">reference</span></td><td class="dim">conf 99. Real plate's plaza floor is a tiled mosaic with grout and per-tile colour under progressive DOF; ours is a smooth vertex-blended gradient with zero high-frequency albedo at any scale.</td></tr><tr><td>creature_portrait</td><td><span class="dim">reference</span></td><td class="dim">conf 99. Real fur has a broad sheen lobe wrapping the muzzle and a soft terminator dozens of pixels wide; ours is pure Lambert on a smooth capsule with a single hard step and no specular anywhere, not even on the horns.</td></tr><tr><td>dusk_mood</td><td><span class="dim">reference</span></td><td class="dim">conf 100. Real lanterns are actual light sources with inverse-square pools on the gravel; our fireflies are emissive sprites that illuminate nothing. Our grass keeps daytime chroma at midnight.</td></tr><tr><td>overshoulder_meadow</td><td><span class="dim">reference</span></td><td class="dim">conf 100. Real frame's ice has a glossy BRDF with a readable stretched reflection; we have no reflective surface and no material that behaves differently from any other material in frame.</td></tr><tr><td>vista_golden</td><td><span class="dim">reference</span></td><td class="dim">conf 99. Real cliffs receive cast shadows from their own overhangs and from the trees on top; our mountains are flat facets lerping to pure white fog with no hue shift, and no tree casts onto anything.</td></tr></table>
       <h3>Frames</h3><div class="grid"><div class="shot"><img loading="lazy" src="../captures/r18nohud/creature_group.png" alt="creature_group.png">
         <div class="cap"><span>creature_group</span><span>272 draws</span></div></div><div class="shot"><img loading="lazy" src="../captures/r18nohud/creature_portrait.png" alt="creature_portrait.png">
         <div class="cap"><span>creature_portrait</span><span>276 draws</span></div></div><div class="shot"><img loading="lazy" src="../captures/r18nohud/dusk_mood.png" alt="dusk_mood.png">
@@ -405,7 +416,7 @@ The design decision that makes the two new mechanics one feature rather than two
     </div>
   </details>
 </main>
-<footer>Regenerate with <code>node tools/progress.mjs</code> · captures via <code>node tools/capture.mjs --round &lt;id&gt;</code> · generated 2026-08-07T23:24:43.486Z</footer>
+<footer>Regenerate with <code>node tools/progress.mjs</code> · captures via <code>node tools/capture.mjs --round &lt;id&gt;</code> · generated 2026-08-07T23:29:39.429Z</footer>
 <div id="lb"><img></div>
 <script>
 const lb=document.getElementById('lb'),lbi=lb.querySelector('img');
