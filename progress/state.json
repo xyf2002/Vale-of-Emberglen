@@ -1,8 +1,8 @@
 {
   "goal": "A 5-minute playable vertical slice that captures the core fantasy of Palworld: a beautiful third-person world, charming creatures, meaningful interaction, and believable creature behaviour.",
   "bar": "The real Palworld. A fresh critic is shown our capture beside an official Palworld frame — same shot type, same resolution, same format, labels stripped, order shuffled — and asked which one is the shipped commercial game. We are done when critics stop reliably picking correctly.",
-  "currentRound": "r16",
-  "currentState": "r16 is captured and measured. Four of six shots are in band; creature_portrait (10.26) and interaction_feed (10.56) exceed the edge ceiling of 10.0 on the HIGH side, which measure.py labels 'over-sharp / no depth cue'.\n\nPer-tile analysis says that is not a global sharpness problem but a DISTRIBUTION one: the near-field grass carries far more local contrast than the reference plate and the background carries far less. A round is out with one builder on src/world/vegetation.js alone — deliberately one lever, after r13 showed what happens when three agents push the same two-sided band at once — and a fresh-context critic on the r16 blind pack.\n\nNote for whoever reads the r14 row: captures/r14 on disk was overwritten by a later re-capture and no longer contains the frames that produced its passing numbers.",
+  "currentRound": "r18nohud",
+  "currentState": "r17grass put the last two failing shots back in band; all six now pass every guardrail (group 7.38, portrait 8.54, dusk 7.60, feed 9.44, overshoulder 7.08, vista 6.45).\n\nr18 is the round that fixes the measurement rather than the art. Every pick-rate number this project has published was taken through an information leak — our frames carried the HUD, the real plates did not — so the headline 0% says nothing about rendering. A matched HUD/no-HUD pair has now been captured off a clean worktree, the overlay's contribution measured (edge ~2%, colors ~52), and the blind pack rebuilt from the HUD-free frames. A fresh critic is judging it now.",
   "pickRate": "0% across r08, r10 and r11 — a blind critic has identified our frame as the in-dev one in 15 of 15 pairs. In r11 every verdict came back at confidence 5. Art direction, judged as a separate question, went 1 of 5 to us (the creature group: 'B's frame is calm and legible... as a picture, B is the better-composed one'). The r16 pack is out with a fresh critic; every gap both previous critics named has since been closed, so that verdict is the one that says whether any of it moved the pick rate.",
   "metrics": {
     "caption": "Objective guardrails, measured with tools/measure.py against the real reference frames. Not the bar — a critic's eye is — but they stop arguments about whether a change helped. Two bands were corrected in r08 after being measured from the reference rather than invented.",
@@ -73,6 +73,36 @@
     "taming.addTrust() is not on src/interaction's public surface. The correct shape is taming.addTrust(cr, -cost, 'broke-out') emitting taming:trust, so src/spheres stops reaching for internals."
   ],
   "rounds": [
+    {
+      "id": "r18nohud",
+      "title": "The blind A/B is re-run without the leak",
+      "date": "2026-08-08",
+      "status": "running",
+      "summary": "The r16 critic reported, unprompted, that every imitation frame carried the HUD and no real plate did — 'that settles the pick before you look at a single rendering pixel'. That retroactively invalidates the 0% pick rate across r08, r10, r11 and r16: those verdicts were measured through an information leak, not through rendering.\n\nr18hud and r18nohud were captured back-to-back off a clean detached worktree at 718e27e, so the only difference between the two rounds is the overlay and no in-flight edits from concurrent sessions are in either. The HUD is worth edge -0.06..-0.25 (mean -0.17, ~2% of the metric) and colors -22..-82 (mean -52). Both rounds pass all six shots on all bands, so the leak was never propping up a number — but the default stays HUD-on, because overshoulder_meadow drops 517 -> 442 colours against a 420 floor and a silent default change would put it near the edge of its band with no art change at all. Standing rule instead: anything feeding abpack.py is captured --no-hud; anything graded against r01-r18 bands is not.\n\nThe pack is out with a fresh-context critic. This is the first pick-rate number in the project's history that measures rendering.",
+      "improvements": [
+        "r18hud / r18nohud captured back-to-back from a detached worktree at HEAD — no concurrent session's uncommitted src/ edits in either",
+        "HUD's contribution to edge and colors quantified per shot and recorded in tools/capture.mjs",
+        "Blind A/B pack rebuilt from HUD-free frames"
+      ],
+      "gaps": []
+    },
+    {
+      "id": "r17grass",
+      "title": "Near-field grass: the detail was all in one plane",
+      "date": "2026-08-08",
+      "status": "done",
+      "summary": "Both failing shots are back in band — creature_portrait 10.26 -> 8.54, interaction_feed 10.56 -> 9.44 — and the four that were already passing did not move.\n\nThe fix came from reading what the metric actually is. measure.py's `edge` is mean |d luminance / dx| on a 320x180 downsample, i.e. total variation per row = (number of alternations) x (amplitude). That rules out the obvious move: softening silhouettes cannot help, because a monotone ramp carries the same total variation as the step it replaces. Measuring amplitude directly against the plates ruled that out too — real Palworld foregrounds carry MORE luminance spread than ours (std 43-61 vs our 30) at HALF the local contrast (edge/std 0.17-0.21 vs our 0.44). We never had too much contrast. We had 3-4x too many alternations, all of it white noise at blade pitch in the first few metres.\n\nSo both carpet noise terms now fall off toward the lens and keep full span past 9 m — aerial perspective run in the direction nobody applies it. Both are mean-preserving by construction, because overshoulder_meadow's ground/sky ratio sits at 0.64 against a 0.63 floor and any net darkening of the near field would have pushed it through.",
+      "improvements": [
+        "Near-field blade-height ramp compressed toward the camera (mean-preserving), full span past 9 m",
+        "Per-blade colour jitter faded out under 9 m by the same curve, so the two noise sources cannot re-add",
+        "New vBladeD view-depth varying threaded into the grass shader",
+        "Five negative results recorded in src/world/vegetation.js as comments"
+      ],
+      "gaps": [
+        "The remaining edge deficit is in the TOP row of every shot — background geometry, not vegetation. Non-vegetation owns 4.5-5.5 of every shot's edge.",
+        "Near-field depth-of-field would be the honest version of this fix and lives in src/post/, out of the vegetation builder's reach."
+      ]
+    },
     {
       "id": "r16",
       "title": "The throw gets an arc — and the frame is measured to be over-sharp in one plane",

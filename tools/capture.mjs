@@ -26,6 +26,21 @@
  * Capture a parallel --no-hud round, measure BOTH, and change the default in a round
  * that does nothing else — do not fold it into a round that is also changing the art.
  *
+ * That paired measurement has now been done. r18hud and r18nohud were captured
+ * back-to-back off a clean worktree at 718e27e, so the ONLY difference between them is
+ * the overlay. The HUD is worth, per shot:
+ *
+ *     edge    -0.06 .. -0.25   (mean -0.17, about 2% of the metric)
+ *     colors  -22  .. -82      (mean -52 unique quantised colours)
+ *
+ * Both rounds pass all six shots on all bands, so the leak was never propping up a
+ * number — but the direction is worth knowing: the HUD is a small net ADDITION of local
+ * contrast and palette, and overshoulder_meadow loses the most (517 -> 442 colours,
+ * against a 420 floor). A future no-HUD default would push that shot near the edge of
+ * its band with no art change at all, which is why the default still has not moved.
+ * The standing rule instead: ANY round that feeds tools/abpack.py must be captured
+ * --no-hud, and rounds graded against r01-r18 bands must not be.
+ *
  * Output: captures/<round>/*.png and captures/<round>/report.json
  *
  * Every critic agent runs THIS, so it must fail loudly: a build that throws produces a
