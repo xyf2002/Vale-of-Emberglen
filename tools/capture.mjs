@@ -6,6 +6,25 @@
  *   node tools/capture.mjs --round r01            # all shots + strips
  *   node tools/capture.mjs --round r01 --only vista_golden,creature_portrait
  *   node tools/capture.mjs --round r01 --width 1280 --height 720   # faster iteration
+ *   node tools/capture.mjs --round r01nohud --no-hud               # for the blind A/B pack
+ *
+ * --no-hud hides the #ui-root DOM overlay before every frame. It exists because the r16
+ * blind critic, unprompted, reported this:
+ *
+ *     "every imitation frame carries the HUD while no real plate does ... that settles
+ *      the pick before you look at a single rendering pixel, which means this pack is
+ *      not actually measuring what it claims to measure."
+ *
+ * It is right, and it invalidates the headline metric retroactively: the 0% pick rate
+ * across r08, r10, r11 and r16 was measured through an information leak. abpack.py
+ * normalises resolution, format and quality for exactly this reason and then we handed
+ * the critic a free label anyway.
+ *
+ * This flag is OFF BY DEFAULT ON PURPOSE. Every band in tools/measure.py was measured
+ * round-over-round against HUD-bearing frames, and silently removing the HUD would move
+ * `edge` and `colors` on every shot at once and quietly break comparison with r01-r16.
+ * Capture a parallel --no-hud round, measure BOTH, and change the default in a round
+ * that does nothing else — do not fold it into a round that is also changing the art.
  *
  * Output: captures/<round>/*.png and captures/<round>/report.json
  *
@@ -27,6 +46,7 @@ const W = Number(arg('width', 1920));
 const H = Number(arg('height', 1080));
 const SEED = arg('seed', '20240719');
 const only = arg('only', null)?.split(',').map((s) => s.trim());
+const noHud = has('no-hud');
 const outDir = path.resolve('captures', round);
 
 /**
@@ -64,6 +84,22 @@ const FRAME_PROBE = () => {
  * whole harness throw "shot is not a function" on the first frame and report ok=false
  * for the round. Restored as a real function.)
  */
+/**
+ * Hide the HUD overlay. Called after every navigation, because freshPage() reloads the
+ * document and takes the injected style with it. It asserts the element exists rather
+ * than failing quietly — a --no-hud round that silently kept the HUD would be the worst
+ * outcome here, since the whole point is that nobody can see the leak in the output.
+ */
+const hideHud = async (page) => {
+  const found = await page.evaluate(() => {
+    const r = document.getElementById('ui-root');
+    if (!r) return false;
+    r.style.display = 'none';
+    return true;
+  });
+  if (!found) throw new Error('--no-hud: #ui-root not found; the HUD would still be in frame');
+};
+
 const grabFrame = async (page, file) => {
   // The 120s timeout and the retry are load-bearing and were lost once already: they
   // lived in a `shot()` helper, that helper went missing in a rename, and when grabFrame
@@ -125,7 +161,9 @@ async function main() {
   page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text().slice(0, 400)); });
   page.on('pageerror', (e) => consoleErrors.push(`pageerror: ${e.message}`.slice(0, 400)));
 
-  const report = { round, seed: SEED, width: W, height: H, at: new Date().toISOString(), ok: true, shots: [], strips: [], consoleErrors };
+  // `noHud` is recorded so a round is self-describing: a pack or a measurement built from
+  // these frames should never have to guess whether the HUD was in them.
+  const report = { round, seed: SEED, width: W, height: H, noHud, at: new Date().toISOString(), ok: true, shots: [], strips: [], consoleErrors };
 
   try {
     await page.goto(`${base}/?capture=1&seed=${SEED}`, { waitUntil: 'load', timeout: 120000 });
@@ -134,6 +172,7 @@ async function main() {
 
     const ready = await page.evaluate(() => window.__game.ready);
     if (ready !== true) throw new Error('game failed to initialise: ' + JSON.stringify(await page.evaluate(() => window.__game.errors)));
+    if (noHud) await hideHud(page);
 
     /**
      * Real isolation between shots. This used to be a comment claiming a fresh page and
@@ -145,6 +184,7 @@ async function main() {
     const freshPage = async () => {
       await page.goto(`${base}/?capture=1&seed=${SEED}`, { waitUntil: 'load', timeout: 120000 });
       await page.waitForFunction(() => window.__game?.ready === true, null, { timeout: 180000 });
+      if (noHud) await hideHud(page);
     };
 
     for (const shot of SHOTS) {

@@ -30,7 +30,11 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 
 const rounds = [];
 for (const r of state.rounds) rounds.push({ ...r, ...(await shotsFor(r.id)) });
-rounds.reverse(); // newest first
+// progress/state.json is maintained newest-first, so no flip is needed. This line used
+// to be `rounds.reverse(); // newest first`, written when the file was ordered the other
+// way round; the file was later flipped and the reverse was not removed, so the page has
+// been rendering OLDEST first and auto-expanding the smoke round — the one entry nobody
+// opening a progress page wants to read.
 
 const badge = (s) => {
   const m = { running: ['#e8b45c', 'running'], done: ['#7fd18b', 'complete'], failed: ['#ff8a8a', 'failed'], planned: ['#8a8f99', 'planned'] };

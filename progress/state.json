@@ -1,17 +1,18 @@
 {
   "goal": "A 5-minute playable vertical slice that captures the core fantasy of Palworld: a beautiful third-person world, charming creatures, meaningful interaction, and believable creature behaviour.",
   "bar": "The real Palworld. A fresh critic is shown our capture beside an official Palworld frame — same shot type, same resolution, same format, labels stripped, order shuffled — and asked which one is the shipped commercial game. We are done when critics stop reliably picking correctly.",
-  "currentRound": "r12",
-  "currentState": "Round 12 landed. All six guardrail shots are in band for the first time: dusk went from 264 distinct colours and 3.50 local contrast to 770 and 7.64, and the three oversaturated daylight frames came back down (vista 0.403 -> 0.277). The two new mechanics the user asked for — throw-to-capture and firearms — are in and verified by their own harnesses (36/36 and 11/12).\n\nThe round's most expensive finding was not a rendering bug but an instrument one. Boulders were visibly floating in every single frame, and five consecutive object-space probes reported that nothing floated, because the instance ORIGINS were all correctly grounded and the lift was baked into the vertices. Believe the frame over the bookkeeping.",
-  "pickRate": "0% across r08, r10 and r11 — a blind critic has identified our frame as the in-dev one in 15 of 15 pairs. In r11 every verdict came back at confidence 5. Art direction, judged as a separate question, went 1 of 5 to us (the creature group: 'B's frame is calm and legible... as a picture, B is the better-composed one').",
+  "currentRound": "r16",
+  "currentState": "r16 is captured and measured. Four of six shots are in band; creature_portrait (10.26) and interaction_feed (10.56) exceed the edge ceiling of 10.0 on the HIGH side, which measure.py labels 'over-sharp / no depth cue'.\n\nPer-tile analysis says that is not a global sharpness problem but a DISTRIBUTION one: the near-field grass carries far more local contrast than the reference plate and the background carries far less. A round is out with one builder on src/world/vegetation.js alone — deliberately one lever, after r13 showed what happens when three agents push the same two-sided band at once — and a fresh-context critic on the r16 blind pack.\n\nNote for whoever reads the r14 row: captures/r14 on disk was overwritten by a later re-capture and no longer contains the frames that produced its passing numbers.",
+  "pickRate": "0% across r08, r10 and r11 — a blind critic has identified our frame as the in-dev one in 15 of 15 pairs. In r11 every verdict came back at confidence 5. Art direction, judged as a separate question, went 1 of 5 to us (the creature group: 'B's frame is calm and legible... as a picture, B is the better-composed one'). The r16 pack is out with a fresh critic; every gap both previous critics named has since been closed, so that verdict is the one that says whether any of it moved the pick rate.",
   "metrics": {
     "caption": "Objective guardrails, measured with tools/measure.py against the real reference frames. Not the bar — a critic's eye is — but they stop arguments about whether a change helped. Two bands were corrected in r08 after being measured from the reference rather than invented.",
     "rows": [
       {
         "name": "local contrast / fine detail",
-        "ours": "6.44 – 9.82 daylight; 7.64 dusk",
+        "ours": "7.06 – 10.56 daylight; 8.28 dusk",
         "target": "5.0 – 10.0",
-        "status": "pass"
+        "status": "fail",
+        "note": "Two shots now exceed the ceiling rather than falling short of the floor. The band is two-sided on purpose: over-sharp is a finding, not a bonus."
       },
       {
         "name": "ground/sky luminance ratio",
@@ -54,7 +55,7 @@
         "ours": "0.77 / 255 (was 0.36)",
         "target": "> 8 / 255",
         "status": "fail",
-        "note": "Shadows now render correctly — proven visually and by a max per-pixel delta of 96/255 where casters exist. The low mean is now a CONTENT failure, not a rendering one: nothing occupies the near field to cast."
+        "note": "Shadows now render correctly — proven visually and by a max per-pixel delta of 96/255 where casters exist. The low mean is now a CONTENT failure, not a rendering one: nothing occupies the near field to cast. r13 addressed this from three sides; normalBias at 0.12 turned out to beat frustum size and cascade count combined."
       },
       {
         "name": "blind A/B pick rate",
@@ -65,17 +66,106 @@
     ]
   },
   "openGaps": [
-    "NOTHING MEETS THE GROUND. The r11 critic's decisive cue in the creature-group pair: our foreground bush is 'an icosphere with berries as separate spheres stuck to it, sitting on the grass with no contact shadow and no ambient occlusion at the ground line. It doesn't sit in the world, it sits on top of the image.' The same defect names the creature portrait — a hard black elliptical blob decal instead of an occlusion gradient.",
-    "CREATURES ARE LIT FROM EVERY DIRECTION EQUALLY. 'The underside of the creature is the same value as the top.' Prime suspect is the fur wrap term (0.60), which remaps a fully back-facing surface up to 0.375 and flattens a sphere into a disc. The designs themselves were praised — 'it's the rendering that fails it, not the design.'",
-    "DUSK IS A DAY RENDER WITH THE EXPOSURE PULLED. Independently reached by the r11 critic and by the guardrails from the other side: ground/sky 0.99 against the reference plate's 1.27. 'A night scene with no light sources in it. The fireflies are unlit point sprites contributing nothing... the brightest thing in frame is the HUD.'",
-    "THE FIRST 25 METRES ARE EMPTY. Per-band shadow coverage down the over-shoulder frame reads 0.011 / 0.042 / 0.186 / 0.050 / 0.000 / 0.027 from sky to nearest. Mid-distance works; the near meadow is bare grass carpet. Same root cause as the flat palette (337 colours against a 420-1100 band) and the low local contrast (5.06 against real plates at 8.06-9.87).",
-    "OUR POST IS NOT READING AT ALL. 'Uniformly, mercilessly sharp from the grass blade at the camera to the peak on the horizon', 'no aerial perspective — the terrain collapses into a stack of flat cutouts'. We ship FogExp2, aerial-perspective materials AND a DOF pass, so this is a strength-of-effect problem, not a missing feature — which is worse, because it means we are paying for all three and reading as if we had none.",
-    "UNTEXTURED GREY PROPS SIT AT FOCAL POINTS. The stone arch 'reads as unshipped greybox: a placeholder blockout that never got a material pass, placed exactly where the eye lands'. Contrast the reference: 'cliff faces carry layered strata with moss accumulating only on upward-facing ledges — a material that knows which way gravity points.' The arch is a landmark in world/index.js and is not yet assigned.",
-    "TERRAIN IS ONE MATERIAL AT ONE SCALE. The same ground mottle and grass card run from camera to horizon with no density falloff, no dirt paths, no rock or sand transitions. 'Real ground tells you where people walk.' Not yet assigned.",
-    "Reference gap: only 1 of 17 official stills is early-game peaceful exploration, so interaction_feed has no honest comp.",
-    "Reference gap: the trailer never shows a creature noticing an approaching player, so behaviour_approach is graded against the 12 written criteria."
+    "ALL THE DETAIL IS IN ONE PLANE. creature_portrait and interaction_feed exceed the edge ceiling from above. Per-tile, the bottom two rows of the frame run +2.5 to +10.8 over the reference plate while the top row runs up to -10 under it: a hard-silhouetted near-field grass carpet in front of an empty, fog-washed distance. Fixing it is not blurring the grass — the real plates carry plenty of near detail, theirs is merely softer and graded with depth.",
+    "EVERY SURFACE IS UNTEXTURED. Named by the r12 critic and still true; our best frame carries 725 distinct quantised colours against 1056 in the richest real plate.",
+    "FUR MICRODETAIL IS BLOCKED, not deferred: the fuzz map is being minified away, and creature_portrait has no edge headroom left to buy any with until the near field gives some back.",
+    "TERRAIN ACNE AT A GRAZING SUN needs a slope-scaled offset — polygonOffset on a customDepthMaterial. Neither shadow.bias (normalised depth) nor normalBias (a world-space push along the normal) can reach it.",
+    "taming.addTrust() is not on src/interaction's public surface. The correct shape is taming.addTrust(cr, -cost, 'broke-out') emitting taming:trust, so src/spheres stops reaching for internals."
   ],
   "rounds": [
+    {
+      "id": "r16",
+      "title": "The throw gets an arc — and the frame is measured to be over-sharp in one plane",
+      "date": "2026-08-07",
+      "status": "done",
+      "summary": "The throw animation was 60% dead time and 0% arc. Sampling the shoulder once per rendered frame caught it moving 156 degrees in a SINGLE step: the arm was behind the head in one frame and in front of the chest in the next, the sphere left the hand somewhere inside that gap, and the remaining 0.28 s crept from 86 to 33 degrees, which reads as lowering the arm rather than following through.\n\nRebudgeted to 0.62 s across five keyframes, with the swing plane tilted ~35 degrees off vertical — a pure sagittal swing happens along the gameplay camera's view axis and projects to a short vertical smear, which is the third time that same trap has eaten an effect here.\n\nThe round's second finding was only visible once the pose had real travel in it, and it is a good example of a verdict passing while the motion is wrong. The gesture clock DECAYED back to zero after finishing, and since the pose samples that clock, it replayed the whole animation in reverse at about 4x — the traveller un-threw the ball. No single reverse step crosses the 35 deg/frame teleport threshold the probe checks for, so it is a smooth, wrong motion rather than a jump, and the probe reported PASS.",
+      "improvements": [
+        "0.16 s wind-up, 0.14 s of swing (about eight frames, the part that has to be legible), 0.12 s deceleration across the body, 0.20 s settling. The swing accelerates into the release at u^1.35, as steep as it can be without the peak frame going back over the teleport threshold.",
+        "The rest of the body throws too: chest leads, pelvis counter-rotates at 40%, weight crosses from the back foot to the front. No scripted step — foot placement belongs to the leg IK and a one-shot stride would fight it for the same two ankles.",
+        "Aiming is now half the wind-up: the sphere rides at the ear and slightly BEHIND the shoulder line rather than being presented at the chest, so the whole 0.62 s budget goes into the half of the arc worth watching, and the predicted-landing arc starts within centimetres of where the ball actually leaves the hand.",
+        "The gesture clock only ever runs forward now; a separate gestureOut fades authority out so a CANCELLED gesture releases the arm instead of rewinding it.",
+        "Measured after: 28.1 deg/frame peak, 9 frames between wind-up apex and release, tail frozen at the follow-through. The throw-to-capture harness stays at 12/12."
+      ],
+      "gaps": [
+        "TWO SHOTS ARE OVER-SHARP. creature_portrait 10.26 and interaction_feed 10.56 against an edge ceiling of 10.0. Tiling the frame 6x8 and computing measure.py's own quantity per tile localises it exactly: the bottom two rows (near grass) carry +2.5 to +10.8 per tile against the reference plate, while the top row is DOWN as much as -10. Every scrap of detail in the frame is crammed into one plane — a hard-edged near-field grass carpet — and there is almost none anywhere else. That is the same defect the r12 critic ranked second as 'no scene structure or depth layering', arriving this time as a number.",
+        "Still open from r12: every surface is untextured."
+      ],
+      "shots": [
+        "vista_golden.png",
+        "overshoulder_meadow.png",
+        "creature_portrait.png",
+        "creature_group.png",
+        "interaction_feed.png",
+        "dusk_mood.png"
+      ]
+    },
+    {
+      "id": "r15",
+      "title": "Vitals, creature health, the traveller's kit — and the facing bug",
+      "date": "2026-08-06",
+      "status": "done",
+      "summary": "Two merged fronts. The survival cluster the owner asked for, and the character finally being a character.\n\nThe no-death rule was lifted by the owner for CREATURES only, and CLAUDE.md was rewritten to say so rather than leaving the next agent to find a contradiction. Two clocks, and the order between them is the whole design: stamina still runs out first and is still the capture window; health is the slower one. The player still collapses and never dies.",
+      "improvements": [
+        "Vitals (vigour, focus, stamina), and every one of them is spent by something. Focus is the meter that can REFUSE an action: below a throw's worth the sphere stays in the satchel. Measured through the real input path — 100 -> 36 stamina over a 4 s sprint, the fourth throw refused at 9.4 focus with the sphere count unmoved.",
+        "Creature health: a woolkin has 117 health and takes 6 per rifle round — exhaustion at shot 9, death at shot 19, so the capture window arrives ten shots before the kill. A body topples, lies 11 s, then SINKS rather than fades, because species materials are shared and fading a corpse fades every other woolkin in the meadow.",
+        "The facing bug. The rig faces -Z everywhere — movement basis, IK pole, stride, boot toes — but the torso and head were authored facing +Z. Since r13 the traveller had walked with the pack leading and the face trailing, and the follow camera sits behind the direction of travel, so it had been filming the character's FACE the whole time. A bald sphere is ambiguous enough that nobody caught it; a horned helmet with a nose guard is not.",
+        "The weapon's basis: the carry ANCHOR was body-relative while the carry DIRECTION came off the camera, so standing still and turning the view pivoted the weapon about the hand. Both are on the body now; only the aim direction comes off the camera. Sweeping the camera a full turn now gives 41.99 deg bore-to-body at all 16 samples, spread 0.00.",
+        "Horned iron helm and leather cuirass, with four negative results kept in the source: a lathe's normals follow its profile so a folded profile renders only backfaces; a partial torus ends at its own equator and its cut face is a flat disc; the face opening has to be wider than every bar crossing it; and the beard was built at r 0.084 around a 0.108 skull, i.e. entirely inside the head."
+      ],
+      "gaps": [
+        "The throw gesture existed but ran 0.45 s with only 0.054 s of forward swing — fixed in r16."
+      ],
+      "shots": []
+    },
+    {
+      "id": "r14",
+      "title": "Berry bushes: grounded, smoothed, and the NaN normals that blacked them out",
+      "date": "2026-08-06",
+      "status": "done",
+      "summary": "The gatherables were the last thing still sitting on top of the image. They now publish 162 contact patches into the r13 ground field (-0.86/255 of ground luminance) and carry an object-side contact band of their own.\n\nMost of the round went on a bug that looked exactly like the feature. Several bushes rendered blue-black. Toggling the ground patches, swapping the material, and even setting the base colour to MAGENTA each changed the frame by zero bytes — which is the tell that the pixels are not coming from where you think. Mesh-hiding bisection over 175 meshes proved the bush painted them, and dumping the attributes found 2529 NaNs in a 3780-float normal array. smoothNormals() stored a base index (0, 3, 6...) into its accumulator and then multiplied it by 3 again on read, so every lookup ran past the end of the array. A NaN normal does not render as an obvious error; it renders as a surface the key light cannot reach, which is indistinguishable from contact shading cranked too far.",
+      "improvements": [
+        "Berry bushes and rocks grounded through world.setContactPatches('gatherables'), plus a per-material contact band anchored to the ground line.",
+        "Smooth-welded normals replace countable facets; berries are round instead of faceted polyhedra.",
+        "The NaN fix also removed the creature_portrait ratio 0.97 / edge 10.09 overshoots — they were the bug, not tuning. All six shots then passed every band."
+      ],
+      "gaps": [
+        "The captures/r14 directory on disk was later overwritten by a re-capture, so the passing r14 numbers no longer have frames behind them. Only the report survives."
+      ],
+      "shots": [
+        "vista_golden.png",
+        "overshoulder_meadow.png",
+        "creature_portrait.png",
+        "creature_group.png",
+        "interaction_feed.png",
+        "dusk_mood.png"
+      ]
+    },
+    {
+      "id": "r13",
+      "title": "Grounding — shadows, contact fields, and creatures that sit in the grass",
+      "date": "2026-08-05",
+      "status": "done",
+      "summary": "One gap, attacked from three sides at once, because the r11 and r12 critics both named the same thing first: nothing in our world meets the ground. Sky widened the shadow frustum and fixed the bias; world added a ground-side contact-occlusion field; creatures and the player got a stack of occluder slabs through the grass canopy.\n\nThe round's lesson was a coordination one, and it is mine. All three levers darken ground pixels, and the ground/sky ratio band has almost no headroom on the low side. Three agents pushing the same number at once produced a collision none of them could attribute from inside their own directory. Net ground exposure is held neutral by two explicit counterweight constants in src/world rather than by moving a band.",
+      "improvements": [
+        "normalBias 0.12 -> 0.06 beat frustum size and cascade count COMBINED as the cause of 'nothing casts a shadow'. It is a world-space push along the normal and scales with nothing, so at 0.12 it walked every receiver 12 cm out from under its occluder — a fifth of the width off both sides of a 60 cm contact shadow. A COARSER shadow box with the lower bias out-measured a finer one by 34%.",
+        "src/world/contact.js: a ground-side contact-occlusion field in one draw call, patches sampled off the heightfield, multiply-blended into the HalfFloat target. Published as world.setContactPatches(tag, patches) so any system can ground its own props without importing anything.",
+        "A shadow map cannot ground a creature standing in tall grass. The carpet is 0.30-0.60 m and creatures stand IN it, so from any playable camera the pixels around a creature's base are grass, not ground: the diff image of a darkened ground plane is a comb of blade-shaped slivers nobody can see. Grounding had to become a stack of occluders THROUGH the canopy. Raising a single decal to clear the canopy detaches it from the feet before it clears.",
+        "Sphere break-out wariness inverted and fixed: a creature that broke out was ending up friendlier than before the throw. Second-throw odds after a wild break-out went 53.7% -> 18.5%.",
+        "The sphere's pull-in beam was authored along the flight line — and you throw at what the reticle is on, so the flight line IS the camera's forward axis. A cone down that axis projects to a bullseye: a glowing ring with no length near, a pale 30 px disc at range. Same family as the rim light that produced no rim."
+      ],
+      "gaps": [
+        "shadow.bias is normalised depth and normalBias is a world-space push; neither can fix terrain acne at a grazing sun. That needs a slope-scaled offset — polygonOffset on a customDepthMaterial.",
+        "Fur microdetail on creatures is blocked: the fuzz map is being minified away, and creature_portrait has no edge headroom to buy any with."
+      ],
+      "shots": [
+        "vista_golden.png",
+        "overshoulder_meadow.png",
+        "creature_portrait.png",
+        "creature_group.png",
+        "interaction_feed.png",
+        "dusk_mood.png"
+      ]
+    },
     {
       "id": "r12",
       "title": "Near field, dusk, creature shading — and two new mechanics",
