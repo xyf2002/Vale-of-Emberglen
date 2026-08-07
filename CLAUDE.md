@@ -27,9 +27,21 @@ and is the most useful document in the repo.
 - **Systems never import each other.** Resolve peers at runtime with `ctx.get('name')`,
   communicate over `ctx.bus`. This is what lets many agents own disjoint directories
   without merge conflicts. See `src/engine/Game.js`.
-- **No death.** Creatures are befriended, staggered or exhausted — never killed. There is
-  no health, no corpse and no despawn-on-damage path anywhere in the build, and none may
-  be added.
+- **Two clocks on a creature, and they are not interchangeable.** The no-death rule was
+  lifted by the owner in r15; creatures now have health and can be killed. Both paths
+  must keep working:
+  - **Stamina** (`src/weapons/weaken.js`) — what a shot is *for*. It runs out first, the
+    creature sits down exhausted, and that is the capture window. This is still the
+    intended loop and nothing may make it unreachable.
+  - **Health** (`src/creatures/vitality.js`) — the slower clock. At zero the creature
+    dies, topples, lies there ~11 s and sinks. Tune `hpDamage` in `weapons/defs.js` only
+    while exhaustion still arrives well before death.
+  Dead creatures stay in `creatures.list` while the body is up, so **every consumer of
+  that list must skip `cr.dead`** — AI, interaction, spheres and targeting already do.
+- **The player collapses, never dies.** `src/vitals/` (vigour, focus, stamina — the
+  Elden Ring cluster) puts the traveller on one knee for a few seconds at zero vigour and
+  stands them back up at 45%. There is no death screen, no respawn and no game over, and
+  none may be added.
 
 ## Traps that have bitten more than once
 

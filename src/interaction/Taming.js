@@ -185,7 +185,8 @@ export function createTaming(ctx, { creatures, player, fx, bus }) {
       let best = null, bestScore = -Infinity;
 
       for (const cr of list) {
-        if (!cr || !cr.position) continue;
+        // the arc stops at the animal: a body accrues no trust and can never be primary
+        if (!cr || !cr.position || cr.dead) continue;
         const st = stateOf(cr);
         st.emoteCd = Math.max(0, st.emoteCd - dt);
         st.spookCd = Math.max(0, st.spookCd - dt);

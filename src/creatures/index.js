@@ -5,6 +5,7 @@ import { speciesAsset, instantiate } from './build.js';
 import { initRig, updateRig, playAnim as rigPlayAnim, setEmote as rigSetEmote } from './anim.js';
 import { contactShadowTexture } from './procgen.js';
 import { makeContactShadows } from './materials.js';
+import { initVitality, hurt, heal, stepVitality } from './vitality.js';
 
 /**
  * CREATURE SYSTEM — owned by the creature builder. Owns what a "pal" *is*: species
@@ -76,7 +77,14 @@ export function createCreatures() {
       c.scene.add(shadows);
 
       const rng = c.rng.fork(21);
-      const plan = [['woolkin', 6], ['emberfox', 4], ['mosshorn', 3], ['dewhare', 3]];
+      // POPULATION IS HELD AT 16 while the two new species land. Adding members without
+      // adding bodies keeps the round a single-variable A/B — "who is in the meadow"
+      // changed, "how busy the meadow is" did not, so a frame that reads better cannot be
+      // explained away by there simply being more to look at. Shalehound is deliberately
+      // a population of one: shy 0.10 means it never runs, so the player meets it whether
+      // or not they look for it, and one is enough for that.
+      const plan = [['woolkin', 5], ['emberfox', 3], ['mosshorn', 3], ['dewhare', 2],
+        ['pumpkit', 2], ['shalehound', 1]];
       for (const [sp, n] of plan) {
         for (let i = 0; i < n; i++) {
           const spot = world?.sampleSpawn?.(rng, { maxSlope: 0.3 });
@@ -121,6 +129,7 @@ export function createCreatures() {
         setEmote(n, ttl) { rigSetEmote(this, n, ttl); },
       };
       cr.pose = rig.pose;
+      initVitality(cr);
       cr.bodyYaw = cr._prevBodyYaw = cr.yaw + cr.stance;
       root.rotation.y = cr.yaw;
       rig.pose.rotation.y = cr.stance;
@@ -140,9 +149,18 @@ export function createCreatures() {
       if (i >= 0) { list.splice(i, 1); ctx.scene.remove(cr.root); }
     },
 
+    /**
+     * Hurt / heal a creature. Health is separate from the weaken ledger's stamina —
+     * see the header of vitality.js for which one is which and why both exist.
+     */
+    hurt(cr, amount, cause) { return hurt(ctx?.bus, cr, amount, cause); },
+    heal(cr, amount) { return heal(cr, amount); },
+
+    /** Dead creatures are never "nearest": nothing may target, tame or talk to a body. */
     nearest(pos, maxDist = Infinity, filter = null) {
       let best = null, bd = maxDist * maxDist;
       for (const c of list) {
+        if (c.dead) continue;
         if (filter && !filter(c)) continue;
         const d = c.position.distanceToSquared(pos);
         if (d < bd) { bd = d; best = c; }
@@ -155,7 +173,19 @@ export function createCreatures() {
       if (cam) _cam.copy(cam.position);
       const step = Math.max(1e-4, dt);
 
+      // A body is stepped and nothing else: no intent, no gait, no attention, no rig.
+      // Collected first and removed after the loop — splicing `list` while iterating it
+      // skips the next creature, which showed up as one animal freezing mid-stride every
+      // time another one died.
+      let reap = null;
       for (const cr of list) {
+        if (cr.dead) {
+          if (stepVitality(cr, dt)) (reap ??= []).push(cr);
+          cr.position.y = (world?.heightAt?.(cr.position.x, cr.position.z) ?? 0) + (cr._toppleY ?? 0);
+          continue;
+        }
+        stepVitality(cr, dt);
+
         // ---- apply AI intent -------------------------------------------------
         const v = cr.intent.move;
         const sp = v.length();
@@ -227,6 +257,11 @@ export function createCreatures() {
         updateRig(cr, dt, cam ? _cam : null);
       }
 
+      if (reap) for (const cr of reap) {
+        ctx.bus.emit('creature:despawn', { id: cr.id, species: cr.species, reason: 'died' });
+        api.despawn(cr);
+      }
+
       // ---- contact occlusion (reference observation #9) -----------------------
       // Not one decal: a stack of horizontal slabs through the grass canopy. See the
       // long note on CONTACT_LAYERS in materials.js for why a ground-plane decal is
@@ -238,6 +273,8 @@ export function createCreatures() {
         let n = 0;
         for (const cr of list) {
           if (n + layers.length > cap) break;
+          // a body sinking out of the world takes its shadow with it
+          if (cr._death?.phase === 'sink') continue;
           const size = cr.def.size ?? 1;
           // tight: roughly the footprint, not the body width. Squashed on the
           // depth axis so it reads as an ellipse under the feet at a low camera.
@@ -278,10 +315,14 @@ export function createCreatures() {
     snapshot() {
       return {
         count: list.length,
+        alive: list.filter((c) => !c.dead).length,
+        dead: list.filter((c) => c.dead).length,
         tamed: list.filter((c) => c.tamed).length,
+        hurt: list.filter((c) => !c.dead && c.health01 < 1).length,
         byMood: list.reduce((a, c) => (a[c.mood] = (a[c.mood] || 0) + 1, a), {}),
         sample: list.slice(0, 4).map((c) => ({
           id: c.id, species: c.species, mood: c.mood, trust: +c.trust.toFixed(2),
+          health: +c.health.toFixed(1), maxHealth: c.maxHealth, dead: c.dead,
           anim: c.anim?.cur ?? '?', expr: c.rig?._expr ?? '?',
           yaw: +c.bodyYaw.toFixed(2), lag: +c.yawLag.toFixed(2),
           pos: [+c.position.x.toFixed(1), +c.position.z.toFixed(1)],

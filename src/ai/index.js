@@ -237,11 +237,15 @@ export function createAI() {
       const hasFood = (interaction?.inventory?.berry ?? 0) > 0;
 
       const list = creatures.list;
-      for (const cr of list) if (!cr._ai) { makeBrain(cr); joinHerd(cr); }
+      for (const cr of list) if (!cr._ai && !cr.dead) { makeBrain(cr); joinHerd(cr); }
 
       for (const h of herds) updateHerd(h, dt);
 
       for (const cr of list) {
+        // A dead creature has no behaviour. Guarded here rather than by removing it from
+        // the list, because the body stays in the world for another ten seconds and
+        // every other consumer of `creatures.list` still needs to see it.
+        if (cr.dead) continue;
         const b = cr._ai;
         b.t += dt;
         b.stateT += dt;
@@ -1125,7 +1129,7 @@ export function createAI() {
   function findPlaymate(cr, b) {
     let best = null, bd = 15 * 15;
     for (const o of creatures.list) {
-      if (o === cr || o.species !== cr.species || !o._ai) continue;
+      if (o === cr || o.dead || o.species !== cr.species || !o._ai) continue;
       const ob = o._ai;
       if (ob.partner || !INTERRUPTIBLE.has(ob.state)) continue;
       if (ob.needs.social < 0.35 || ob.p.social < 0.3) continue;
@@ -1656,7 +1660,8 @@ export function createAI() {
     let sx = 0, sz = 0;
     const rad = 1.1 + (cr.stats?.size ?? 1) * 0.9;
     for (const o of creatures.list) {
-      if (o === cr) continue;
+      // the living walk around each other; a body is stepped over, not avoided
+      if (o === cr || o.dead) continue;
       const dx = cr.position.x - o.position.x, dz = cr.position.z - o.position.z;
       const d2 = dx * dx + dz * dz;
       const r = rad + (o.stats?.size ?? 1) * 0.6;

@@ -192,6 +192,11 @@ export const TIMBRE = {
   woolkin: { base: 300, formant: 950, Q: 5, grain: 0.55, wobble: 5.0, type: 'triangle', body: 0.9, level: 2.50 },
   emberfox: { base: 640, formant: 2000, Q: 7, grain: 0.22, wobble: 8.5, type: 'sawtooth', body: 0.55, level: 2.00 },
   mosshorn: { base: 132, formant: 470, Q: 4, grain: 0.40, wobble: 3.2, type: 'sawtooth', body: 1.4, level: 0.50 },
+  // `level` for these two is not hand-tuned by ear — it is levelFor(base, type) below,
+  // evaluated and written out, which is what that function exists for. Retune only with
+  // a measurement, the way the first three were.
+  pumpkit: { base: 520, formant: 1500, Q: 6, grain: 0.30, wobble: 6.5, type: 'triangle', body: 0.7, level: 2.82 },
+  shalehound: { base: 190, formant: 720, Q: 4, grain: 0.45, wobble: 3.6, type: 'sawtooth', body: 1.2, level: 0.69 },
 };
 
 /** the fitted normalisation, so species invented later are still in the same mix */

@@ -22,6 +22,9 @@ export const ORDER = {
   // Loadout runs before the things it gates, so a slot change lands on the same frame
   // the player pressed it. Spheres and weapons then read an already-settled hand.
   LOADOUT: 62, SPHERES: 64, WEAPONS: 66,
+  // Vitals reads what the frame already spent (a sprint, a throw, a raised weapon) and
+  // must therefore run after all of them, but before the UI that draws the meters.
+  VITALS: 70,
   UI: 80, AUDIO: 90, POST: 100,
 };
 

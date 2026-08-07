@@ -132,10 +132,12 @@ class Pool {
  * fast pale chips and a spray of sparks; turf throws green flecks that barely leave the
  * ground; water throws a white crown with no sparks at all.
  *
- * `creature` is the odd one out on purpose. It emits no debris, no sparks and nothing
- * red — a warm pale bloom and a few motes of shed fluff, which reads as "that landed and
- * it felt it" rather than as a wound. This is the tonal line the whole module is built
- * around: the gun is here to tire a creature out so a Bond Sphere will hold it.
+ * `creature` used to be the odd one out: a warm pale bloom and a few motes of shed
+ * fluff, nothing red, because a gun here only tired an animal out. r15 changed the
+ * brief — the owner asked for a visible spray on a hit and for creatures that can die —
+ * so this surface now throws a proper burst: more particles, faster, with a deep red
+ * core under the warm fluff. It is still a stylised spray and not gore; the palette is
+ * two reds and the same shed-fur cream, and it is gone in under half a second.
  */
 const SURFACES = {
   dirt:     { dust: [0.34, 0.28, 0.20], chips: [0.26, 0.21, 0.15], n: 14, sparks: 0, speed: 3.4, size: 0.22, life: 0.75, gravity: -9.5 },
@@ -144,7 +146,7 @@ const SURFACES = {
   stone:    { dust: [0.52, 0.52, 0.50], chips: [0.40, 0.40, 0.39], n: 10, sparks: 7, speed: 5.0, size: 0.16, life: 0.55, gravity: -11.0 },
   wood:     { dust: [0.36, 0.27, 0.17], chips: [0.30, 0.22, 0.13], n: 11, sparks: 0, speed: 3.6, size: 0.17, life: 0.60, gravity: -9.5 },
   water:    { dust: [0.72, 0.80, 0.82], chips: [0.62, 0.72, 0.76], n: 16, sparks: 0, speed: 3.8, size: 0.22, life: 0.55, gravity: -12.0 },
-  creature: { dust: [0.98, 0.84, 0.55], chips: [0.95, 0.76, 0.50], n: 10, sparks: 12, speed: 1.7, size: 0.13, life: 0.40, gravity: -4.5 },
+  creature: { dust: [0.62, 0.10, 0.08], chips: [0.95, 0.78, 0.52], n: 22, sparks: 14, speed: 4.2, size: 0.16, life: 0.52, gravity: -8.0 },
   air:      { dust: [0, 0, 0], chips: [0, 0, 0], n: 0, sparks: 0, speed: 0, size: 0, life: 0, gravity: 0 },
 };
 

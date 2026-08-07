@@ -4,9 +4,14 @@ import * as THREE from 'three';
  * THE BOND SPHERE, built in code.
  *
  * Not a plastic toy: a lacquered seed-pod. Bone-white crown, moss-dark base, a brass
- * seam and one amber eye that lights when something is inside it. It has to read at
- * 0.29 m across from six metres away in a green meadow, which means the silhouette
- * does the work (a hard bright/dark split at the equator) and the colour only confirms it.
+ * seam and one amber eye that lights when something is inside it. The silhouette does
+ * the work (a hard bright/dark split at the equator) and the colour only confirms it.
+ *
+ * SIZE. This was 0.145 m radius — 29 cm across, a beach ball, and in the hand it read
+ * as the traveller carrying a pumpkin. It is now 0.062 (12.4 cm across): a large
+ * grapefruit, which is about what a thrown capture device should be and still reads
+ * against grass at the six metres the throw is usually taken from. Anything smaller
+ * stops being legible in flight; the trail and the landing ring carry it after that.
  *
  * Everything is shared between pooled instances — one geometry set, one material set —
  * so having three of these in flight costs three times the draw calls and none of the
@@ -14,7 +19,7 @@ import * as THREE from 'three';
  * lower half so the seam never floats unattached when it opens.
  */
 
-export const SHELL_R = 0.145;
+export const SHELL_R = 0.062;
 
 /** speckled lacquer, so the shell is not a flat vinyl blob under a strong key light */
 function lacquerTexture(rng, base, speck, n = 220) {
@@ -67,8 +72,10 @@ export function createSphereFactory(rng) {
   const geo = {
     top: new THREE.SphereGeometry(SHELL_R, 22, 8, 0, Math.PI * 2, 0, Math.PI / 2),
     bot: new THREE.SphereGeometry(SHELL_R, 22, 8, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2),
-    band: new THREE.TorusGeometry(SHELL_R * 1.012, 0.0165, 6, 26),
-    button: new THREE.SphereGeometry(0.036, 12, 8),
+    // the seam's thickness is a FRACTION of the shell, not a constant: at the old
+    // 0.145 m radius 0.0165 was a fine brass line, and at 0.062 it would be a tyre
+    band: new THREE.TorusGeometry(SHELL_R * 1.012, SHELL_R * 0.114, 6, 26),
+    button: new THREE.SphereGeometry(SHELL_R * 0.248, 12, 8),   // fraction, not a constant
     core: new THREE.SphereGeometry(SHELL_R * 0.78, 12, 8),
   };
   geo.band.rotateX(Math.PI / 2);
@@ -110,6 +117,7 @@ export function createSphereFactory(rng) {
     /** one poolable sphere. Nothing here is per-frame allocated after this call. */
     create() {
       const root = new THREE.Group();
+      root.name = 'bond_sphere';      // probes find it by name; nothing else reads this
       const shell = new THREE.Group();
       root.add(shell);
 
@@ -143,9 +151,9 @@ export function createSphereFactory(rng) {
         /** 0 = shut, 1 = fully hinged open */
         setOpen(k) {
           const e = k * k * (3 - 2 * k);
-          top.position.y = 0.105 * e;
+          top.position.y = SHELL_R * 0.72 * e;
           top.rotation.x = -1.05 * e;
-          bot.position.y = -0.048 * e;
+          bot.position.y = -SHELL_R * 0.33 * e;
           bot.rotation.x = 0.38 * e;
         },
         /** 0..1 — how hot the eye and the inner core burn */

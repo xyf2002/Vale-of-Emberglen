@@ -49,7 +49,8 @@ import { createWeakenLedger } from './weaken.js';
  * BUS EVENTS
  *   weapon:fired    { id, from, dir, inMag, spreadDeg }
  *   weapon:impact   { point, normal, surface, distance }
- *   weapon:hit      { creature, damage }        (+ id, species, stamina, exhausted)
+ *   weapon:hit      { creature, damage }        (+ id, species, stamina, exhausted,
+ *                                                hpDamage, health, health01, killed)
  *   weapon:dry      { id }                      trigger pulled on an empty magazine
  *   weapon:reload   { id, phase }               'start'|'magout'|'magin'|'charge'|'done'|'cancel'
  *   weapon:aim      { id, aiming }
@@ -91,9 +92,15 @@ export function createWeapons() {
   let rl = null;                     // { id, phase, t, dur, total, elapsed }
 
   // scratch — nothing in update() may allocate
-  const _hand = new THREE.Vector3();
   const _anchor = new THREE.Vector3();
   const _aimAnchor = new THREE.Vector3();
+  const _restAnchor = new THREE.Vector3();
+  const _bodyFwd = new THREE.Vector3();
+  const _bodyRight = new THREE.Vector3();
+  const _grip = new THREE.Vector3();
+  const _fore = new THREE.Vector3();
+  const _bore = new THREE.Vector3();
+  const _hold = { grip: _grip, fore: _fore, bore: _bore, slide: 0, weight: 1, foreWeight: 1 };
   const _camFwd = new THREE.Vector3();
   const _camRight = new THREE.Vector3();
   const _camUp = new THREE.Vector3();
@@ -243,14 +250,28 @@ export function createWeapons() {
       });
     }
 
-    // ---- the only thing a gun does to a creature --------------------------
+    // ---- what a gun does to a creature ------------------------------------
+    // TWO clocks, and they are not interchangeable. The ledger drains STAMINA, which is
+    // the befriending loop and always runs out first. Health is the second, slower one,
+    // added in r15 when the owner lifted the no-death rule; running it out kills the
+    // creature (src/creatures/vitality.js). A shot that only staggered before now also
+    // costs health, so nothing that fires may skip this call.
     if (trace.creature) {
       const rec = ledger.hit(trace.creature, d.damage, _dir, d.stagger, d.knockback);
+      const wasAlive = !trace.creature.dead;
+      // which way to topple: away from the shot, decided here where the direction is known
+      trace.creature._deathRoll = _dir.dot(_camRight) >= 0 ? 1 : -1;
+      const took = creatures?.hurt?.(trace.creature, d.hpDamage ?? 0, 'shot') ?? 0;
+      const killed = wasAlive && trace.creature.dead;
       ctx.bus.emit('weapon:hit', {
         creature: trace.creature,
         id: trace.creature.id,
         species: trace.creature.species,
         damage: +d.damage.toFixed(3),
+        hpDamage: +took.toFixed(1),
+        health: +(trace.creature.health ?? 0).toFixed(1),
+        health01: +(trace.creature.health01 ?? 0).toFixed(3),
+        killed,
         stamina: +rec.stamina.toFixed(3),
         exhausted: rec.exhausted,
         absorbed: !!rec.absorbed,
@@ -283,7 +304,7 @@ export function createWeapons() {
     const d = def();
     const model = d ? models[d.id] : null;
     for (const id in models) models[id].group.visible = !!(model && models[id] === model);
-    if (!model || !player) return;
+    if (!model || !player) { player?.holdWeapon?.(dt, null); return; }
 
     const cam = c.camera;
     cam.getWorldDirection(_camFwd).normalize();
@@ -291,7 +312,19 @@ export function createWeapons() {
     _camUp.crossVectors(_camRight, _camFwd).normalize();
 
     // ---- where the gun sits ---------------------------------------------
-    player.handPosition(_hand);
+    // LOW READY is anchored to the BODY, never to the animated hand. It used to read
+    // `player.handPosition()`, which was correct while the arms were pure locomotion —
+    // but the arms now IK onto the grip, so hand -> anchor -> grip -> hand closes a
+    // loop: each frame the hand chases the grip offset it produced last frame and the
+    // weapon walks off the character in a straight line. Body-relative breaks the loop.
+    const by = player.bodyYaw ?? 0;
+    _bodyFwd.set(-Math.sin(by), 0, -Math.cos(by));
+    _bodyRight.set(Math.cos(by), 0, -Math.sin(by));
+    _restAnchor.copy(player.position)
+      .addScaledVector(UP, 1.16)
+      .addScaledVector(_bodyRight, 0.30)
+      .addScaledVector(_bodyFwd, 0.16);
+
     // The aim pose is a shoulder pose, built off the PLAYER, not off the camera: the
     // camera is 2.3 m behind the avatar's back, so anything anchored to it floats.
     //
@@ -300,20 +333,67 @@ export function createWeapons() {
     // shoulder pose, and completely invisible, because the camera is directly behind the
     // avatar and the avatar's own torso occluded the entire weapon. In a third-person
     // shooter the gun has to clear the body silhouette or the player has no idea what
-    // they are holding. 0.40 m forward puts the receiver past the chest, and the right
-    // offset walks it toward the camera's own 0.70 m shoulder line.
+    // they are holding.
+    //
+    // They are no longer as large as they were (0.32 right / 0.40 forward), because the
+    // arms now have to REACH the thing. An arm is 0.555 m from shoulder to wrist; at the
+    // old anchor the left wrist was 0.60 m from the left shoulder even with the chest
+    // bladed, so the support arm clamped straight and the hand hung short of the gun —
+    // which is the same "floating weapon" read the anchor was chosen to avoid, just
+    // relocated to the hands. 0.24 / 0.34 keeps both wrists inside reach and still
+    // clears the silhouette, because the muzzle is another 0.58 m past the anchor.
+    // ...and the aim anchor is BODY-relative too, for the same reason the rest anchor is.
+    // It used to be built on _camRight/_camFwd. The body only damps toward the camera
+    // while aiming (player/index.js, rate 18/s), so during any quick turn the camera is
+    // ahead of the torso by up to tens of degrees — and a weapon whose POSITION comes
+    // off one basis while its owner's hands come off another slides around the chest
+    // for the length of that lag. Position on the body, direction on the camera, and
+    // the player system caps how far apart the two bases are allowed to get.
     _aimAnchor.copy(player.position)
-      .addScaledVector(UP, 1.42)
-      .addScaledVector(_camRight, 0.32)
-      .addScaledVector(_camFwd, 0.40);
+      .addScaledVector(UP, 1.38)
+      .addScaledVector(_bodyRight, 0.24)
+      .addScaledVector(_bodyFwd, 0.34);
     const raise = loadout?.swapProgress?.() ?? 1;
-    _anchor.copy(_hand).lerp(_aimAnchor, aimT);
+    _anchor.copy(_restAnchor).lerp(_aimAnchor, aimT);
     // a reload drops the gun out of the aim line, and so does a swap still playing out
     const dip = rl ? (rl.phaseIdx < 2 ? 0.16 : 0.09) : 0;
     _anchor.y -= dip + (1 - raise) * 0.35;
 
     // ---- where it points -------------------------------------------------
-    _restDir.copy(_camFwd).addScaledVector(UP, -0.62).normalize();   // low ready
+    // Low ready is ONE-HANDED, at the right hip, muzzle forward and down.
+    //
+    // The two-handed patrol carry (butt at the shoulder, muzzle down and across to the
+    // left) was tried first and thrown away twice over. It is invisible: the gameplay
+    // camera sits directly behind the avatar, so anything held near the centreline at
+    // chest height is inside the torso-and-backpack silhouette and the player sees no
+    // weapon at all. And it is unreachable: a two-handed carry keeps the gun near the
+    // centreline precisely BECAUSE both arms must reach it, and an arm here is 0.555 m,
+    // so pushing the grip far enough right to clear the silhouette (~0.30 m) puts the
+    // support hand 0.58 m from the left shoulder and the left arm clamps out straight
+    // and short of the gun. One hand at the hip solves both at once — and it frees the
+    // left arm to keep swinging with the gait, which is what a carried rifle looks like.
+    //
+    // The muzzle goes down AND well out to the right, not straight down the sightline:
+    // the barrel is the only long feature the weapon has, and a barrel pointed along
+    // the view axis projects to a stub of a dozen pixels — the same failure the sphere
+    // system's pull-in beam hit (CLAUDE.md). Angled across the frame it reads as a
+    // rifle from the first frame.
+    //
+    // THE BASIS IS THE BODY'S, NOT THE CAMERA'S, and that is the whole fix for "the
+    // muzzle keeps changing where it points relative to my character". This vector was
+    // built from _camFwd/_camRight while the ANCHOR was already body-relative, so the
+    // weapon pivoted about the hand every time the player looked around: standing still
+    // only turns the camera (bodyYaw is unchanged unless you move or aim), and the gun
+    // chased it. Body basis means the low-ready pose is welded to the torso — look
+    // wherever you like, the rifle sits on the hip exactly where it sat.
+    //
+    // No camera PITCH either: _camFwd carried it, so glancing at the sky lifted the
+    // muzzle. A gun carried at the hip does not care where its owner's eyes are.
+    // Pitch arrives with aimT, along with the rest of the camera's direction.
+    _restDir.copy(_bodyFwd).multiplyScalar(0.50)
+      .addScaledVector(UP, -0.60)
+      .addScaledVector(_bodyRight, 0.45)
+      .normalize();
     _poseDir.copy(_restDir).lerp(_camFwd, aimT).normalize();
     if (dip > 0) _poseDir.addScaledVector(UP, -0.35).normalize();
 
@@ -333,6 +413,19 @@ export function createWeapons() {
     model.group.position.copy(_anchor).addScaledVector(_poseDir, -snapX * (d.recoil.kickBack / 0.03) * 0.6);
     model.group.updateMatrixWorld(true);
     model.muzzle.getWorldPosition(_muzzle);
+
+    // ---- and the hands that are supposed to be on it ---------------------
+    // Done here, after the pose and inside the same frame, so the grip the arms solve
+    // for is the grip the gun is at right now — including this frame's recoil kick, so
+    // the shoulders absorb the shot for free.
+    model.grip.getWorldPosition(_grip);
+    model.fore.getWorldPosition(_fore);
+    _bore.set(0, 0, -1).applyQuaternion(model.group.quaternion);
+    _hold.slide = model.slide ?? 0;
+    _hold.weight = 1;
+    // the support hand only comes up with the gun; at the hip the left arm swings free
+    _hold.foreWeight = aimT;
+    player.holdWeapon?.(dt, _hold);
   }
 
   // ----------------------------------------------------------------- system

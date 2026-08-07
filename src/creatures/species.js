@@ -641,7 +641,393 @@ const DEWHARE = {
   },
 };
 
-export const SPECIES_LIST = [WOOLKIN, EMBERFOX, MOSSHORN, DEWHARE];
+/* ================================================================= PUMPKIT */
+/* The round-headed cat. Its silhouette slot is not a SHAPE nobody else uses — every
+   free shape was gone by the fourth species — it is a PROPORTION nobody else uses: two
+   clean circles of very different diameter joined by a waist, head on top and much the
+   wider of the two. Woolkin is also "round", but woolkin's outline is scalloped by wool
+   lobes and its mass is uniform; read as black cutouts, woolkin is one ragged blob and
+   pumpkit is a gourd. That is the whole reason the waist stop exists — delete it and
+   this creature becomes a second woolkin.
+
+   Head spans t 0.50-1.00 (y 0.42-0.99, max half-width 0.270); body spans t 0-0.50
+   (max half-width 0.213). The head is 27% wider than the body on purpose. */
+
+const pumpkitStops = [
+  { t: 0.00, r: 0.006, y: 0.018 },
+  { t: 0.06, r: 0.132, y: 0.032, sz: 1.02 },
+  { t: 0.16, r: 0.194, y: 0.108, sz: 1.06 },
+  { t: 0.28, r: 0.213, y: 0.212, sz: 1.07 },
+  { t: 0.40, r: 0.204, y: 0.330, sz: 1.05 },
+  { t: 0.50, r: 0.176, y: 0.424, sz: 1.01 },
+  { t: 0.57, r: 0.167, y: 0.481, sz: 1.00 },   // THE WAIST — the pinch that makes it two circles
+  { t: 0.66, r: 0.218, y: 0.556, sz: 1.00 },
+  { t: 0.76, r: 0.262, y: 0.652, sz: 1.00 },
+  { t: 0.86, r: 0.270, y: 0.776, sz: 1.00 },   // widest point of the head
+  { t: 0.94, r: 0.228, y: 0.888, sz: 1.00 },
+  { t: 0.98, r: 0.132, y: 0.952 },
+  { t: 1.00, r: 0.006, y: 0.986 },
+];
+
+const PUMPKIT = {
+  id: 'pumpkit', name: 'Pumpkit', size: 1.00, speed: 2.3, shy: 0.38, diet: 'berry',
+  gait: 'trot', mass: 0.9,
+  // A THIRD WARM ORANGE, deliberately, against reference #5's "one saturated hero hue".
+  // Woolkin (apricot) and Emberfox (orange) already own this wedge of the colour circle,
+  // so hue cannot be what separates this one at distance — PATTERN is. Neither of the
+  // other two has a hard-edged marking anywhere on it: they are smooth tonal gradients.
+  // Pumpkit is the only creature in the meadow with a two-tone body (saturated orange
+  // over a large cream bib) and the only one with drawn stripes. If a round ever reports
+  // "the three orange ones read the same at 20 m", the fix is to raise `amt` on the
+  // stripes and widen the bib, NOT to desaturate the hero — that was tried in reasoning
+  // and it just makes a muddy woolkin.
+  pal: { hero: 0xe8873a, deep: 0xcf6f26, stripe: 0xa9501c, cream: 0xf7e6cb, inner: 0xf0a49a, paw: 0xf7e6cb, tail: 0xf7e6cb },
+  fur: { rep: [7, 8], contrast: 0.14, tufts: 85, streak: 0.6, sheen: 0.0, rim: 0.19, fill: 0.34, wrap: 0.62, fuzz: 0.18 },
+  // `tall` is the aspect correction described in the WOOLKIN block, recomputed for this
+  // patch: the face cell is square, but it lands on a surface 0.50 wide and ~0.55 tall in
+  // body units, so a canvas circle already renders 1.10x taller than wide. tall = 1.05
+  // lands the eye just barely oval. Move faceU/faceV and this number moves with them.
+  face: {
+    // eyeR was 0.152 in the first render and the two outlines met in the middle of the
+    // face — one goggle rather than two eyes. 0.140 keeps them huge and separate.
+    gap: 0.190, eyeY: 0.415, eyeR: 0.140, tall: 1.05, slant: 0.12, lid: 0.93,
+    outlineW: 0.026, outline: '#3a2016', sclera: '#ffffff',
+    iris: '#3f8f4a', iris2: '#9ad46a', pupil: '#12240f', irisR: 0.74, irisTall: 1.04,
+    pupilR: 0.50, irisY: 0.06, brow: false,
+    // Round pupil, not a slit. A vertical slit is the single most accurate cat cue and
+    // it is also the one that reads as a predator; every Pal-shaped face in the reference
+    // set has a round pupil with one catchlight.
+    mouth: 'cat', mouthY: 0.600, mouthW: 0.072, mouthIn: '#5c2a2e', tongue: '#e8909a',
+    nose: null,
+    muzzle: { y: 0.585, rx: 0.170, ry: 0.110, color: '#f7e6cb' },
+    blush: 'rgba(232,140,110,0.32)', blushGap: 0.330, blushY: 0.545, blushR: 0.082,
+  },
+  faceU: 0.150, faceV: [0.560, 0.985],
+  key: {
+    hipY: 0.22, spineY: 0.42, headY: 0.700, headZ: -0.010,
+    earX: 0.135, earY: 0.930, earZ: 0.005, earLen: 0.11,
+    armX: 0.195, armY: 0.400, armZ: -0.040,
+    legX: 0.110, legY: 0.120, legZ: -0.020,
+    tailY: 0.300, tailZ: 0.205, tailStep: [0.055, 0.100],
+  },
+  build(B, i) {
+    const P = this.pal;
+    // The head owns everything above the waist, so the whole top circle turns as one.
+    const bodyW = yChain([[i.hips, -9], [i.spine, 0.26], [i.head, 0.560]], 0.24);
+    // ---- tabby banding. bodyPaint has no stripe primitive and one was NOT added: a row
+    // of narrow elliptical patches around the back does the job as pure data, and adding
+    // a stripe channel to bodyPaint would have touched a function all four shipped
+    // species run through. `soft` is low (0.42) because the whole point of this marking
+    // is that it is the only HARD edge on any creature out there.
+    //
+    // MEASURED, first render: with the bands only at u = 0.5 +/- 0.118 — i.e. the spine
+    // and just either side of it — the portrait plate showed NO stripe at all. The graded
+    // portrait is a three-quarter front view, and so is most of playing the game; a
+    // marking that lives on the back of a quadruped-ish body is a marking nobody sees.
+    // They now run from the spine out to u = 0.5 +/- 0.20, which is the flank, and stop
+    // there: past that they would collide with the cream bib and turn into freckles on
+    // the chest.
+    const stripes = [];
+    // Second render, still no stripe in the plate: u = 0.5 +/- 0.20 is 72 degrees off the
+    // spine, which is the BACK of the flank — on a three-quarter front view, the view the
+    // portrait uses and the view the game spends most of its time in, that is still around
+    // the far side. They now reach +/- 0.315, i.e. 65 degrees off the NOSE. That is as far
+    // forward as they can go: the cream bib's `front` term is still zero out there
+    // (cos 65 = 0.42 against a 0.48 threshold) and one step further would print stripes
+    // on the chest.
+    const around = [0, 0.105, -0.105, 0.21, -0.21, 0.315, -0.315];
+    for (let k = 0; k < 5; k++) {
+      const v = 0.155 + k * 0.062;
+      const w = 1 - 0.14 * k;
+      for (const du of around) {
+        stripes.push({ color: P.stripe, u: 0.5 + du, v, ru: 0.058 * w, rv: 0.030, soft: 0.38, amt: 0.80 });
+      }
+    }
+    for (let k = 0; k < 3; k++) {
+      const v = 0.742 + k * 0.058;
+      for (const du of around) {
+        stripes.push({ color: P.stripe, u: 0.5 + du, v, ru: 0.052, rv: 0.024, soft: 0.38, amt: 0.62 });
+      }
+    }
+    // THE FOREHEAD BARS, and the reason they exist is the same reason Shalehound's shield
+    // is on its chest. Third render, flank bands out to 66 degrees off the nose: still no
+    // stripe in the portrait. At 66 degrees the surface is nearly edge-on to a camera the
+    // creature is turning to face, so the marking is compressed into the silhouette edge —
+    // a few pixels wide, at any distance, forever. On a creature that always presents its
+    // front, a marking that is going to read has to BE on the front. These sit above the
+    // eyes on the brow, which is where a tabby's are anyway. The drawn face patch is
+    // alpha-tested outside its muzzle and eyes, so the fur underneath shows through.
+    for (const [v, du, rv] of [[0.893, 0, 0.018], [0.893, 0.058, 0.015], [0.893, -0.058, 0.015],
+      [0.936, 0.028, 0.014], [0.936, -0.028, 0.014],
+      [0.845, 0.112, 0.015], [0.845, -0.112, 0.015]]) {
+      stripes.push({ color: P.stripe, u: du, v, ru: 0.042, rv, soft: 0.36, amt: 0.85 });
+    }
+    B.addGrid(sweepGrid({ uSeg: 44, vSeg: 48, stops: pumpkitStops }), {
+      matrix: M(), weight: bodyW, uvScale: this.fur.rep,
+      paint: bodyPaint({
+        base: P.hero, top: P.deep, ao: 0.17, aoV: 0.28,
+        // the cream bib runs from the chest up over the throat and dies under the chin.
+        // Narrowed from spread 0.31 after the first render: at 0.31 it wrapped so far
+        // round the barrel that the creature read as cream with orange trim, and the one
+        // thing this species cannot afford is to stop reading as ORANGE.
+        belly: { color: P.cream, spread: 0.26, soft: 0.58, v0: 0.05, v1: 0.56, fade: 0.14, amt: 0.88 },
+        patches: stripes,
+      }),
+    });
+    // ---- cat ears: short triangles, deliberately NOT the silhouette. The gourd is.
+    const earStops = arc(12, (t) => ({
+      r: 0.085 * Math.sin(Math.min(1, 0.14 + t * 0.90) * Math.PI) ** 0.5 * (1 - 0.30 * t),
+      x: 0.135 + t * 0.070,
+      y: 0.930 + t * 0.185,
+      z: 0.005 + t * 0.012,
+      sx: 0.70 + 0.22 * Math.sin(t * 2.6), sz: 1.30 - 0.45 * t,
+      roll: -0.10,
+    }));
+    const earG = sweepGrid({ uSeg: 14, vSeg: 16, stops: earStops });
+    const paintEar = partPaint(P.hero, { tip: P.inner, tipV: 0.60, rootAo: 0.28 });
+    B.addGrid(earG, { matrix: M(), weight: chainWeight([[i.head, 0], [i.earL, 0.16], [i.earLT, 0.58]], 0.24), uvScale: [2, 3], paint: paintEar });
+    B.addGrid(earG, { matrix: MIRROR, weight: chainWeight([[i.head, 0], [i.earR, 0.16], [i.earRT, 0.58]], 0.24), uvScale: [2, 3], paint: paintEar });
+    // ---- NO CHEEK FLUFF. Two negative results, both from renders, both worth keeping:
+    //
+    //   1. Emberfox stacks its cheek fins by ROTATING copies about Z
+    //      (`M([0,dy,0],[0,0,rz])`). Reused here at rz +/-0.16 it pushed the tuft ROOT
+    //      from x 0.235 to x 0.344 while the head radius at that height is 0.263 — the
+    //      tufts detached and floated beside the skull, and the bbox blew out to 0.91
+    //      wide on a 0.54-wide head. Rotation about the origin is not a small nudge when
+    //      the part sits 0.7 up the body.
+    //   2. Offset in Y instead and they attach cleanly — and still read, in the portrait,
+    //      as four pale nubs down each side of the skull, like legs on a caterpillar.
+    //      A row of small same-sized bumps on a big smooth sphere always will.
+    //
+    // The head is left as one clean sphere, which is the point: this creature's whole
+    // claim on a silhouette slot is "two clean circles of different size". Adding
+    // high-frequency detail to the outline of the big one gives that away to woolkin.
+    // The ears and the drawn face carry the character instead.
+    // ---- mitten arms with cream socks
+    const armStops = arc(11, (t) => ({
+      r: 0.060 * Math.sin(Math.min(1, 0.32 + t * 0.74) * Math.PI) ** 0.40 * (1 + 0.26 * t * t),
+      x: 0.195 + t * 0.040, y: 0.400 - t * 0.210, z: -0.040 - t * 0.045,
+    }));
+    const armG = sweepGrid({ uSeg: 12, vSeg: 12, stops: armStops });
+    const paintPaw = partPaint(P.hero, { tip: P.paw, tipV: 0.62, rootAo: 0.30 });
+    B.addGrid(armG, { matrix: M(), weight: rigid(i.armL), uvScale: [1.6, 1.8], paint: paintPaw });
+    B.addGrid(armG, { matrix: MIRROR, weight: rigid(i.armR), uvScale: [1.6, 1.8], paint: paintPaw });
+    // ---- stubby back legs
+    const legStops = arc(10, (t) => ({
+      r: 0.076 * Math.sin(Math.min(1, 0.30 + t * 0.78) * Math.PI) ** 0.42,
+      y: 0.165 - t * 0.165, z: -0.020 - t * 0.030, sz: 1 + 0.60 * t * t,
+    }));
+    const legG = sweepGrid({ uSeg: 12, vSeg: 12, stops: legStops });
+    B.addGrid(legG, { matrix: M([0.110, 0, 0]), weight: rigid(i.legL), uvScale: [1.6, 1.6], paint: paintPaw });
+    B.addGrid(legG, { matrix: mirrored(M([0.110, 0, 0])), weight: rigid(i.legR), uvScale: [1.6, 1.6], paint: paintPaw });
+    // ---- thin cat tail with a cream tip. Kept SLIM on purpose: Emberfox already owns
+    // "one heavy sweeping brush" in the silhouette vocabulary, and a second big tail in
+    // the meadow costs more than it buys.
+    const tailStops = arc(14, (t) => ({
+      r: (0.030 + 0.036 * Math.sin(Math.min(1, 0.12 + t * 0.90) * Math.PI) ** 0.7) * (1 - 0.18 * t),
+      y: 0.300 + t * 0.440 - t * t * 0.100,
+      z: 0.205 + Math.sin(t * 1.7) * 0.115,
+      sx: 1, sz: 1,
+    }));
+    B.addGrid(sweepGrid({ uSeg: 14, vSeg: 20, stops: tailStops }), {
+      matrix: M(), uvScale: [2.2, 4.5],
+      weight: chainWeight([[i.hips, 0], [i.tail0, 0.12], [i.tail1, 0.46], [i.tail2, 0.78]], 0.26),
+      paint: partPaint(P.hero, { tip: P.tail, tipV: 0.60, rootAo: 0.26 }),
+    });
+    return { weight: bodyW, stops: pumpkitStops };
+  },
+};
+
+/* ============================================================== SHALEHOUND */
+/* The plated one. Its blade and shield are ORGANS, not equipment: there is no hand bone
+   in `bones()` and nothing in this build is a prop. The plate is a thin swept slab of
+   keratin growing off the spine; the "blade" is a flattened tail.
+
+   Silhouette slot: HARD EDGES AND STRAIGHT LINES, but read the caveat. The shield ended
+   up on the CHEST (see the long note in build() for why the back does not work), and a
+   chest plate sits inside the body outline — so as a pure black cutout this creature is
+   "quadruped, upright head, one straight blade off the back" and the shield contributes
+   nothing. Its real separation from the other five is a hard-edged PALE slab on a dark
+   body, i.e. value and edge, not outline. That is a weaker claim than the other four
+   species make and it should be stated rather than assumed.
+
+   Three things hold the plate in the same world as everything else and none are optional:
+     * the slab's cross-section is an ellipse, so every edge is rounded, never chamfered;
+     * it takes the SAME fur texture as the body, only at a much lower `uvScale`, so the
+       surface reads as a large-scale growth grain rather than a machined face;
+     * no sheen. A specular plate is a metal plate, and a metal plate is a different game.
+       materials.js was deliberately not touched for this creature.
+
+   The head rises to a vertical column at the front instead of hanging forward the way
+   Mosshorn's does. That is a rig decision, not a pose decision: the drawn face patch is
+   a piece of the body sweep, and its local "up" follows the sweep tangent. On a
+   forward-hanging head the tangent runs toward the nose, so the whole faces.js layout
+   (eyes above mouth, lid cut from the top, brow above that) lands rotated 90 degrees.
+   Mosshorn lives with it because its head is short. An alert dog's head is not short, so
+   this one stands its head up and gets an ordinary upright face for free.
+
+   MEASURED, first render: the original stops stood the head on a column that reached
+   y 1.005 with a barrel only 0.66 long, and at portrait distance the whole creature read
+   as an upright PEAR with a face on it — no quadruped anywhere in the frame. The barrel
+   is now 0.59 long before radii (bbox 1.06 with them) against a skull that tops out at
+   0.925 and is narrower than the chest, which is the proportion that says "dog". */
+
+const shaleStops = [
+  { t: 0.00, r: 0.006, y: 0.400, z: 0.400 },
+  { t: 0.07, r: 0.124, y: 0.424, z: 0.386, sz: 1.06 },
+  { t: 0.19, r: 0.214, y: 0.492, z: 0.330, sz: 1.18 },
+  { t: 0.32, r: 0.244, y: 0.556, z: 0.238, sz: 1.22 },
+  { t: 0.45, r: 0.248, y: 0.598, z: 0.126, sz: 1.18 },   // widest: the chest, not the head
+  { t: 0.57, r: 0.234, y: 0.626, z: 0.014, sz: 1.08 },
+  { t: 0.67, r: 0.208, y: 0.652, z: -0.078, sz: 1.00 },
+  { t: 0.76, r: 0.192, y: 0.706, z: -0.140, sz: 0.98 },   // shoulders turn up into the skull
+  { t: 0.85, r: 0.196, y: 0.782, z: -0.176, sz: 0.98 },
+  { t: 0.92, r: 0.186, y: 0.848, z: -0.190, sz: 0.98 },
+  { t: 0.97, r: 0.126, y: 0.898, z: -0.188 },
+  { t: 1.00, r: 0.006, y: 0.925, z: -0.182 },
+];
+
+const SHALEHOUND = {
+  id: 'shalehound', name: 'Shalehound', size: 1.26, speed: 1.7, shy: 0.10, diet: 'grass',
+  gait: 'quad', mass: 1.9,
+  // shy 0.10 is the lowest in the meadow and it is the ONLY behavioural authoring this
+  // creature gets. src/ai reads exactly one species field, `shy`, and rolls a personality
+  // from it (high bold, low panic distance, long dwell). "Stands its ground while the
+  // others scatter" then emerges from the shared state machine instead of being a bespoke
+  // guard state — no new AI state was added and none is needed.
+  // hero was 0xb4553f and rendered, under this build's key of 2.0, as a bright orange that
+  // sat right on top of Emberfox and Pumpkit — the exact collision the brick red was
+  // chosen to avoid. Measured off the first portrait, not guessed. 0x9c4634 is a stop
+  // darker and a step toward red; the plate does the value contrast, so the body does not
+  // have to be light.
+  pal: { hero: 0x853324, deep: 0x682619, belly: 0xcaa583, plate: 0xc9b894, plateTip: 0xdfd0b0, muzzle: 0xc9a37e, paw: 0x53342a },
+  fur: { rep: [8, 6], contrast: 0.16, tufts: 70, streak: 0.8, sheen: 0.0, rim: 0.16, fill: 0.31, wrap: 0.58, fuzz: 0.15 },
+  // aspect correction: this patch is ~0.36 wide and ~0.30 tall in body units, i.e. wider
+  // than tall, the opposite of Pumpkit's — so `tall` is above 1 here and below 1 there.
+  face: {
+    gap: 0.170, eyeY: 0.360, eyeR: 0.120, tall: 1.35, slant: 0.24, lid: 0.74,
+    outlineW: 0.026, outline: '#2a1a16', sclera: '#ffffff',
+    iris: '#c07f1e', iris2: '#f0c256', pupil: '#1c1006', irisR: 0.60, irisTall: 1.0,
+    pupilR: 0.46, brow: true,
+    mouth: 'caret', mouthY: 0.660, mouthW: 0.064, mouthIn: '#4c2422', tongue: '#d9838c',
+    nose: { y: 0.585, w: 0.032, color: '#33201b' },
+    muzzle: { y: 0.620, rx: 0.185, ry: 0.115, color: '#d2ae8c' },
+    blush: null,
+  },
+  faceU: 0.140, faceV: [0.735, 0.985],
+  key: {
+    hipY: 0.42, spineY: 0.60, headY: 0.800, headZ: -0.178,
+    earX: 0.130, earY: 0.865, earZ: -0.165, earLen: 0.105,
+    armX: 0.175, armY: -0.050, armZ: -0.075,
+    legX: 0.185, legY: -0.080, legZ: 0.245,
+    tailY: 0.460, tailZ: 0.390, tailStep: [0.100, 0.078],
+  },
+  build(B, i) {
+    const P = this.pal;
+    // A plain yChain will not do here: the rump's top surface is as high as the skull, so
+    // weighting by height alone hands the hindquarters to the head bone and the creature
+    // wags its own backside when it looks at you. Gate on "forward AND high".
+    const bodyW = (p) => {
+      const fwd = clamp01((-p.z - 0.06) / 0.14);
+      const up = clamp01((p.y - 0.660) / 0.18);
+      const hs = sm(fwd * up);
+      if (hs > 0.02) return [[i.spine, 1 - hs], [i.head, hs]];
+      const back = clamp01((p.z - 0.06) / 0.34);
+      return [[i.spine, 1 - back * 0.35], [i.hips, back * 0.35]];
+    };
+    B.addGrid(sweepGrid({ uSeg: 42, vSeg: 46, stops: shaleStops }), {
+      matrix: M(), weight: bodyW, uvScale: this.fur.rep,
+      paint: bodyPaint({
+        base: P.hero, top: P.deep, ao: 0.19, aoV: 0.0,
+        belly: { color: P.belly, spread: 0.26, soft: 0.60, v0: 0.02, v1: 0.58, fade: 0.15, amt: 0.80 },
+      }),
+    });
+    // ---- THE SHIELD. One slab, leaning back, rising past the crown so it clears the
+    // head in profile. `sx` is the left-right width and `sz` the thickness: 0.17 puts the
+    // slab at ~2 cm through at this creature's scale, which is what stops it reading as a
+    // fin. uvScale [1.2, 1.0] against the body's [8, 6] is the Q9 decision — same fur
+    // texture, ~7x the feature size, so it grains like horn instead of fuzzing like fur.
+    const plateOf = (rr, y0, dy, z0, dz, sx0, sx1, env) => arc(14, (t) => ({
+      r: rr * Math.sin(Math.min(1, env + t * (1 - env + 0.001)) * Math.PI) ** 0.22,
+      x: 0, y: y0 + t * dy, z: z0 + t * dz,
+      sx: sx0 - (sx0 - sx1) * t, sz: 0.17,
+    }));
+    const paintPlate = partPaint(P.plate, { tip: P.plateTip, tipV: 0.52, rootAo: 0.34 });
+    //
+    // THE SHIELD IS ON THE CHEST, NOT THE BACK, AND THIS COST THREE RENDERS TO ACCEPT.
+    //
+    // It was authored as a dorsal slab — the obvious reading of "a plate on its back" —
+    // and every attempt to make that work failed the same way: from the front it is a
+    // bonnet. Sized wide (sx0 2.60) it was a broad pale mass behind an upright skull.
+    // Narrowed under the skull's own half-width and pushed back over the hips it was a
+    // smaller pale mass behind an upright skull. The reason is not the plate. It is this:
+    //
+    //   AT PLAYABLE RANGE THIS GAME TURNS ITS CREATURES TO FACE THE CAMERA. See
+    //   creatures/index.js — `attendW = viewBias * (1 - clamp((dd - 6) / 8, 0, 1))`, so
+    //   attention is FULL inside 6 m and only reaches zero past 14 m. Every portrait, and
+    //   nearly every second of play, is a near-front view. A feature that only reads in
+    //   profile does not read.
+    //
+    // So the dominant plate moved to where a shield actually belongs on an animal that is
+    // always facing you: across the chest, under the chin, leaning back as it rises. It is
+    // held just inside the barrel's own half-width (0.238 against 0.248) so the body
+    // outline still closes around it and it reads as part of the animal rather than a
+    // board tied on. One small dorsal plate stays over the hips, which is what keeps the
+    // profile from being a plain egg and what the name is about.
+    B.addGrid(sweepGrid({ uSeg: 20, vSeg: 22, stops: plateOf(0.125, 0.330, 0.315, -0.235, -0.075, 1.90, 1.30, 0.08) }), {
+      matrix: M(), weight: bodyW, uvScale: [1.2, 1.0], paint: paintPlate,
+    });
+    // The spine ridge: three short plates rising toward the shoulders, every one of them
+    // topping out BELOW the crown (0.875 / 0.915 / 0.920 against a skull at 0.925). One
+    // tall dorsal plate is a bonnet; a low serrated run is a back. It is a profile detail
+    // and it is priced as one — small, three grids, no claim on the head-on read.
+    for (const [rr, y0, dy, z0] of [[0.062, 0.760, 0.115, 0.300], [0.066, 0.820, 0.095, 0.150], [0.058, 0.835, 0.085, 0.010]]) {
+      B.addGrid(sweepGrid({ uSeg: 14, vSeg: 14, stops: plateOf(rr, y0, dy, z0, 0.020, 1.25, 0.72, 0.10) }), {
+        matrix: M(), weight: bodyW, uvScale: [1.1, 1.0], paint: paintPlate,
+      });
+    }
+    // ---- THE BLADE: the tail, flattened. sx 0.32 across, sz 1.30 deep, tapering to a
+    // point — a vertical edge, not a spike, so it still has length from the side.
+    const bladeStops = arc(13, (t) => ({
+      r: 0.070 * (1 - 0.94 * t ** 1.35) + 0.004,
+      y: 0.455 + t * 0.250,
+      z: 0.385 + t * 0.320,
+      sx: 0.32, sz: 1.30,
+    }));
+    B.addGrid(sweepGrid({ uSeg: 16, vSeg: 20, stops: bladeStops }), {
+      matrix: M(), uvScale: [0.8, 1.0],
+      weight: chainWeight([[i.hips, 0], [i.tail0, 0.14], [i.tail1, 0.48], [i.tail2, 0.80]], 0.26),
+      paint: partPaint(P.deep, { tip: P.plateTip, tipV: 0.34, rootAo: 0.30 }),
+    });
+    // ---- small swept-back ears. The plate is the silhouette budget; these stay quiet.
+    const earStops = arc(10, (t) => ({
+      r: 0.058 * Math.sin(Math.min(1, 0.16 + t * 0.88) * Math.PI) ** 0.5,
+      x: 0.130 + t * 0.080, y: 0.865 + t * 0.105, z: -0.165 + t * 0.070,
+      sx: 0.72, sz: 1.35, roll: -0.12,
+    }));
+    const earG = sweepGrid({ uSeg: 12, vSeg: 12, stops: earStops });
+    const paintEar = partPaint(P.deep, { tip: P.muzzle, tipV: 0.66, rootAo: 0.30 });
+    B.addGrid(earG, { matrix: M(), weight: chainWeight([[i.head, 0], [i.earL, 0.18], [i.earLT, 0.60]], 0.26), uvScale: [1.6, 2], paint: paintEar });
+    B.addGrid(earG, { matrix: MIRROR, weight: chainWeight([[i.head, 0], [i.earR, 0.18], [i.earRT, 0.60]], 0.26), uvScale: [1.6, 2], paint: paintEar });
+    // ---- four legs. Front pair rides the arm bones, which is what sQuad() drives.
+    const legStops = arc(10, (t) => ({
+      r: 0.082 * (1 - 0.12 * t) * Math.sin(Math.min(1, 0.26 + t * 0.80) * Math.PI) ** 0.40,
+      y: 0.345 - t * 0.345, sz: 1 + 0.55 * t * t,
+    }));
+    const legG = sweepGrid({ uSeg: 12, vSeg: 12, stops: legStops });
+    // tipV 0.86, not 0.74: at 0.74 the dark paw colour claimed the bottom quarter of each
+    // leg and four black boots is a costume, not an animal.
+    const paintLeg = partPaint(P.hero, { tip: P.paw, tipV: 0.86, rootAo: 0.34 });
+    for (const [x, z, bn] of [[0.185, 0.245, i.legL], [0.175, -0.075, i.armL]]) {
+      B.addGrid(legG, { matrix: M([x, 0, z]), weight: rigid(bn), uvScale: [1.6, 1.6], paint: paintLeg });
+    }
+    B.addGrid(legG, { matrix: mirrored(M([0.185, 0, 0.245])), weight: rigid(i.legR), uvScale: [1.6, 1.6], paint: paintLeg });
+    B.addGrid(legG, { matrix: mirrored(M([0.175, 0, -0.075])), weight: rigid(i.armR), uvScale: [1.6, 1.6], paint: paintLeg });
+    return { weight: bodyW, stops: shaleStops };
+  },
+};
+
+export const SPECIES_LIST = [WOOLKIN, EMBERFOX, MOSSHORN, DEWHARE, PUMPKIT, SHALEHOUND];
 
 export const SPECIES = {};
 for (const s of SPECIES_LIST) {

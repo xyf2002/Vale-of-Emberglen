@@ -266,6 +266,16 @@ function formLighting(def) {
     // this one stays shallow. Pushed past ~0.40 it stops reading as a creature standing
     // in grass and starts reading as a creature with no bottom.
     case 'dewhare': return { key: 1.95, ambFloor: 0.34, groundAO: 0.38, groundAOh: 0.20 };
+    // Pumpkit is a big smooth sphere on a smaller one. Like woolkin it flattens to a disc
+    // without a hard crown-to-chin ambient falloff, but unlike woolkin it has real legs
+    // and a visible gap under the belly, so the ground term stays nearer the default.
+    case 'pumpkit': return { key: 2.05, ambFloor: 0.26, groundAO: 0.52, groundAOh: 0.30 };
+    // Shalehound carries a flat slab angled away from every other surface on it. That
+    // slab faces mostly up and back, so in the dusk shot it is lit by sky alone — which
+    // is why the ambient floor here is set above woolkin's 0.23 rather than at it. The
+    // read the creature depends on is a PALE shape against a dark body; if a round finds
+    // the plate going flat-black at low sun, this floor is the first number to check.
+    case 'shalehound': return { key: 2.00, ambFloor: 0.29, groundAO: 0.54, groundAOh: 0.40 };
     default: return { key: 2.10, ambFloor: 0.28, groundAO: 0.50, groundAOh: 0.28 };
   }
 }

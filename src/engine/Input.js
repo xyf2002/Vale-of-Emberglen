@@ -13,6 +13,7 @@ const DEFAULT_BINDINGS = {
   KeyQ: 'call',
   KeyC: 'crouch',
   KeyR: 'throw',
+  KeyB: 'eat',        // eat a berry yourself — the satchel is food as well as bait
   KeyJ: 'journal',
   Tab: 'journal',
   KeyM: 'mute',

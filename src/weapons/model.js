@@ -174,21 +174,18 @@ export function buildWeaponModel(id) {
   group.add(mesh);
   group.scale.setScalar(layout.scale);
 
-  const muzzle = new THREE.Object3D();
-  muzzle.position.fromArray(layout.muzzle);
-  group.add(muzzle);
-
-  const eject = new THREE.Object3D();
-  eject.position.fromArray(layout.eject);
-  group.add(eject);
-
-  const grip = new THREE.Object3D();
-  grip.position.fromArray(layout.grip);
-  group.add(grip);
-
-  const fore = new THREE.Object3D();
-  fore.position.fromArray(layout.fore);
-  group.add(fore);
+  // named so a probe can find them in the live scene graph without a back door
+  const empty = (name, xyz) => {
+    const o = new THREE.Object3D();
+    o.name = `${id}_${name}`;
+    o.position.fromArray(xyz);
+    group.add(o);
+    return o;
+  };
+  const muzzle = empty('muzzle', layout.muzzle);
+  const eject = empty('eject', layout.eject);
+  const grip = empty('grip', layout.grip);
+  const fore = empty('fore', layout.fore);
 
   return {
     group, mesh, mat, muzzle, eject, grip, fore, slide: layout.slide,

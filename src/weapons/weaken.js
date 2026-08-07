@@ -5,7 +5,13 @@ import * as THREE from 'three';
  *
  * This module exists to make one rule impossible to break by accident: **nothing here
  * can kill anything.** There is no health, no death state, no corpse and no "remove from
- * list" path in this file, and there never should be. A creature that takes fire loses
+ * list" path in this file, and there never should be.
+ *
+ * r15: creatures CAN now be killed — the owner lifted the no-death rule — but not from
+ * here. Health lives in `src/creatures/vitality.js` and is a separate, slower clock that
+ * `src/weapons/index.js` drives alongside this one. Everything below still describes the
+ * stamina path exactly as it always did, and the stamina path must keep running out
+ * FIRST: exhaustion is the capture window, and the capture window is the point. A creature that takes fire loses
  * STAMINA; a creature at zero stamina is EXHAUSTED — winded, sitting down, easy to
  * befriend — and further rounds do nothing to it but rock it on its feet. That is the
  * Palworld loop, and it is the only reason firearms belong in a game about making

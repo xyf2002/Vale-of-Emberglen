@@ -54,7 +54,7 @@ const MOOD_CALL = {
   calm: 'coo', idle: 'coo', resting: 'hum', sleeping: 'hum',
 };
 /** what a species says when it is just pottering about */
-const IDLE_CALL = { woolkin: 'bleat', emberfox: 'chirp', mosshorn: 'hum' };
+const IDLE_CALL = { woolkin: 'bleat', emberfox: 'chirp', mosshorn: 'hum', pumpkit: 'purr', shalehound: 'yip' };
 
 export function createAudio() {
   let ctx = null;
