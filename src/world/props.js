@@ -8,8 +8,167 @@ import { applyContactShade, beginPropChannel } from './vegetation.js';
 export { queryProps, propsNear, propColliderCount, resetPropColliders } from './vegetation.js';
 import { AX, AZ, PX, PZ, LAKE } from './terrain.js';
 
+/* =================================================================================
+ * "NOT ONE OF THE TREES CASTS A SHADOW ONTO THE GROUND" — DIAGNOSED, r19, AND IT IS
+ * NEITHER OF THE TWO THINGS IT LOOKS LIKE. Read this before spending another round on
+ * the shadow map; three sessions have now gone at it from three directions.
+ *
+ * The r19 blind critic ranked this second of four: "Count the trees: zero of them
+ * darken the ground ... a lollipop tree with no ground shadow is the most obvious
+ * tell." Confirmed by eye on captures/r18nohud/vista_golden.png. The two obvious
+ * causes were tested and BOTH ARE FALSE:
+ *
+ *   1. "the trees are missing castShadow."  No. tools/_castattrib.mjs walks the scene
+ *      and finds all five tree InstancedMeshes (336 instances) with castShadow true and
+ *      visible true, and they measurably self-shadow — turning the flag off changes the
+ *      canopies. The depth map contains them.
+ *   2. "they are outside the shadow frustum."  No, and this is the expensive one to
+ *      re-derive. tools/_treediff.mjs renders the staged vista with the ortho box at
+ *      half-size 90, 170 (ship) and 400 and diffs trees-cast on/off in each:
+ *
+ *          box half-size   90 m     170 m    400 m
+ *          tree-shadow mean 0.072   0.076    0.074   (units of 255)
+ *          pixels touched   0.43%   0.45%    0.47%
+ *
+ *      A 4.4x change in reach is worth 0.04% of the frame. This agrees with the
+ *      _boxsweep table in sky/index.js and closes the question a third time.
+ *
+ * THE ACTUAL CAUSE is the one CLAUDE.md already warns about, applied to a slope rather
+ * than to the frame: a shadow can only remove the KEY's contribution, and the ground
+ * those trees stand on has almost no key on it. tools/_keymap.mjs renders the frame
+ * against the same frame with sun.intensity = 0 and reports mean |difference| by region:
+ *
+ *      tree-covered hillside   2.44 / 255      <- the trees the critic counted
+ *      near meadow            51.22
+ *      mid meadow             44.16
+ *      left hillside          43.09
+ *
+ * The hillside every visible tree in vista_golden stands on is receiving 5% of the key
+ * the meadow beside it receives, because it faces away from the sun. It is ALREADY
+ * unlit, and no shadow map of any resolution or extent can darken it further. The
+ * amplified trees-on/off diff (captures/_treediff/ship_diff.png) shows this directly:
+ * every changed pixel is on a canopy, not one is on the hillside.
+ *
+ * Two things follow, and neither of them is in this directory:
+ *   - The fix is the KEY/FILL RATIO (sky/index.js), not the shadow map. A slope at 5%
+ *     of key renders at nearly the same luminance as one at 100% because the unshadowed
+ *     fill puts it back; that is why the frame reads as "one global illumination level"
+ *     and why the same slope has no visible form of its own either.
+ *   - Tree PLACEMENT (vegetation.js) is the other half. Every tree in the frame is on a
+ *     hillside at 200-400 m; there is not one in the flat, fully lit near meadow where
+ *     its shadow would rake across the ground the camera is actually looking at.
+ * ================================================================================= */
+
+// DO NOT "FIX" THIS TO `new THREE.Color(hex)`, however much CLAUDE.md's double-decode
+// trap says you should. It IS the double decode — and world/index.js already knows,
+// and compensates for it with `liftVertexAlbedo(m.geometry, 4.6)` on every rock mesh it
+// adds. Removing the second conversion here without removing that gain there makes
+// every boulder 4.6x too bright, and liftVertexAlbedo clamps at 1.0 per channel, so
+// what you actually get is a white rock with a red cast (the warm ledge tint clips
+// first in red). The two lines have to move together, and the lift is in a file this
+// system does not own. Flagged in the r19 report instead.
 const C = (hex) => new THREE.Color(hex).convertSRGBToLinear();
 const toWorld = (u, v) => [u * AX + v * PX, u * AZ + v * PZ];
+
+/**
+ * A SPECULAR LOBE ON A LAMBERT MATERIAL — reference #8 / the r19 blind critique.
+ *
+ *   "Lambert-only materials: no specular lobe, no roughness variation, no reflections.
+ *    The real frames differentiate materials BY THEIR HIGHLIGHT ... stone is matte. The
+ *    imitation has one shading response for the entire world, so a rock, a leaf, a metal
+ *    helmet and an animal's fleece are distinguishable only by hue."
+ *
+ * "Stone is matte" is not "stone has no lobe". A dry facet of granite still has a
+ * dielectric F0 of ~0.04 and a Fresnel that climbs to 1.0 at grazing, and that grazing
+ * climb is the entire reason a real boulder's silhouette separates from the grass behind
+ * it. Ours had none, because MeshLambertMaterial has no specular path at all — its
+ * RE_Direct writes directDiffuse and nothing else.
+ *
+ * WHY NOT JUST SWITCH THE STONE TO MeshStandardMaterial. Measured, and rejected: the
+ * standard/physical shader also turns on the IBL, and `scene.environment` is a PMREM of
+ * a GROUND-LESS sky sphere (see the long note in creatures/materials.js). Every rock's
+ * underside would be lit by sky, which is the exact flatness this round is trying to
+ * remove — and it would have arrived alongside the specular that was supposed to fix it,
+ * so neither could be attributed. A hand-written direct lobe costs ~15 lines of GLSL,
+ * adds no indirect term, and leaves the ambient exactly where the round before this one
+ * measured it.
+ *
+ * The lobe is injected into RE_Direct_Lambert rather than appended after
+ * lights_fragment_end, on purpose: inside RE_Direct, `directLight.color` has ALREADY
+ * been multiplied by the shadow map. A highlight appended afterwards has no way to see
+ * the shadow term and burns straight through cast shadow, which reads as a rock that is
+ * lit from inside.
+ *
+ * MEASURE THIS ON tools/_stoneshot.mjs, NOT ON THE SIX MATCHED SHOTS. Rocks and ruins
+ * move 0.30% of the pixels in vista_golden and 0.09% in overshoulder_meadow, so the
+ * whole of this function plus the cavity and course-joint bakes below register as
+ * +0.1 on `mean` and nothing at all on `edge` in measure.py. That is not evidence the
+ * stone is fine; it is evidence the graded framings never point at any. On the ruin
+ * close-up the same change is worth, over stone pixels only: value span (p95-p05)
+ * 124.9 -> 144.9, sd 51.9 -> 57.0, with whole-frame `edge` flat at 5.18 — more form,
+ * no extra high-frequency noise.
+ *
+ * ROUGHNESS VARIATION comes from a hash of the face normal. The stone geometry is
+ * flat-shaded, so the normal is constant across a facet and the hash is therefore
+ * constant across a facet: adjacent facets of the same boulder catch the key at
+ * different widths, which is what "roughness variation" looks like on faceted rock.
+ * A per-pixel noise would just be sparkle.
+ */
+export function applyStoneSpecular(mat, { rough = 0.62, spread = 0.22, f0 = 0.045, gain = 1.0 } = {}) {
+  const prev = mat.onBeforeCompile;
+  const prevKey = mat.customProgramCacheKey;
+  const f = (v) => v.toFixed(4);
+  mat.onBeforeCompile = function (sh, renderer) {
+    if (prev) prev.call(this, sh, renderer);
+    const src = THREE.ShaderChunk.lights_lambert_pars_fragment;
+    const ANCHOR = 'reflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseColor );';
+    if (!src.includes(ANCHOR)) {
+      console.warn('[props] Lambert chunk changed shape; stone specular skipped');
+      return;
+    }
+    const chunk = src.replace(ANCHOR, `${ANCHOR}
+      {
+        // per-facet roughness: the normal is flat across a facet, so this is too
+        float h_ = fract( sin( dot( geometryNormal, vec3( 12.9898, 78.233, 37.719 ) ) ) * 43758.5453 );
+        float rg_ = clamp( ${f(rough)} + ( h_ - 0.5 ) * ${f(spread)}, 0.06, 1.0 );
+        float a_ = rg_ * rg_;
+        float a2_ = a_ * a_;
+        vec3 H_ = normalize( directLight.direction + geometryViewDir );
+        float NdH_ = saturate( dot( geometryNormal, H_ ) );
+        float VdH_ = saturate( dot( geometryViewDir, H_ ) );
+        float NdV_ = max( dot( geometryNormal, geometryViewDir ), 1e-4 );
+        float NdL_ = max( dotNL, 1e-4 );
+        float d_ = NdH_ * NdH_ * ( a2_ - 1.0 ) + 1.0;
+        float D_ = a2_ / ( PI * d_ * d_ );
+        // Smith height-correlated visibility, the same one BRDF_GGX uses
+        float sv_ = NdL_ * sqrt( NdV_ * NdV_ * ( 1.0 - a2_ ) + a2_ );
+        // NB: sl_, not gl_ -- GLSL reserves every identifier that starts with gl_ and the
+        // shader fails to link with "reserved built-in name".
+        float sl_ = NdV_ * sqrt( NdL_ * NdL_ * ( 1.0 - a2_ ) + a2_ );
+        float V_ = 0.5 / max( sv_ + sl_, 1e-6 );
+        // F90 is 1.0. Every dielectric goes to full reflectance at grazing, and that
+        // climb is the whole point — see creatures/materials.js for the round this cost.
+        float F_ = ${f(f0)} + ( 1.0 - ${f(f0)} ) * pow( 1.0 - VdH_, 5.0 );
+        reflectedLight.directSpecular += irradiance * ( D_ * V_ * F_ * ${f(gain)} );
+      }`);
+    // MeshLambertMaterial's own main() composes ONLY directDiffuse + indirectDiffuse +
+    // emissive, so a lobe written into reflectedLight.directSpecular is computed and then
+    // thrown away. That cost twenty minutes of "the shader compiles and nothing changed";
+    // if the stone ever goes flat again, check this line before touching the BRDF.
+    const OUT = 'vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;';
+    if (!sh.fragmentShader.includes(OUT)) {
+      console.warn('[props] Lambert outgoingLight line changed shape; stone specular discarded');
+      return;
+    }
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <lights_lambert_pars_fragment>', chunk)
+      .replace(OUT, `${OUT}
+        outgoingLight += reflectedLight.directSpecular;`);
+  };
+  const tag = `stonespec${rough}_${spread}_${f0}_${gain}`;
+  mat.customProgramCacheKey = prevKey ? () => prevKey.call(mat) + tag : () => tag;
+  return mat;
+}
 
 /* ================================================================= ROCKS ====== */
 
@@ -18,6 +177,8 @@ function rockGeometry(rng, noise, detail = 1) {
   const p = g.attributes.position;
   const sx = rng.range(0.75, 1.4), sy = rng.range(0.5, 0.95), sz = rng.range(0.75, 1.4);
   const ph = rng.range(0, 10);
+  // the per-vertex displacement gain, kept for the cavity term below
+  const disp = new Float32Array(p.count);
   for (let i = 0; i < p.count; i++) {
     let x = p.getX(i), y = p.getY(i), z = p.getZ(i);
     // stratified: flatten in y and cut faceted steps so it reads as rock, not a potato.
@@ -38,6 +199,7 @@ function rockGeometry(rng, noise, detail = 1) {
     const band = Math.round((y + ph) * 2.6) / 2.6 - ph;
     y = lerp(y, band, 0.45);
     const d = 1 + 0.30 * noise.fbm(x * 2.1 + ph, z * 2.1 - ph, 3) + 0.16 * noise.fbm(y * 3.4, x * 3.4, 2);
+    disp[i] = d;
     p.setXYZ(i, x * d * sx, y * d * sy, z * d * sz);
   }
   g.computeVertexNormals();
@@ -65,17 +227,44 @@ function rockGeometry(rng, noise, detail = 1) {
   //   ledges — up-facing surfaces are paler and warmer (dust, lichen, sun bleaching);
   //            down-facing ones stay cool and dark
   //   grain  — a fine per-facet break so adjacent facets never share an exact value
+  //   cavity — see below
+  //
+  // ------------------------------------------------------------------
+  // CAVITY OCCLUSION, r19. The blind critic's second ranked gap: "the bushes have no
+  // occlusion in their own concavities, so a berry cluster reads as spheres floating in
+  // front of a lump rather than nestled in it ... nothing has depth, mass, or contact."
+  //
+  // The same sentence is true of every prop in this file, and the shadow map cannot
+  // help: a dent in a boulder is 5-20 cm across and a shadow texel is 6.8 cm, so the
+  // occlusion inside it is at best two texels wide before the PCF kernel averages it
+  // back to lit. It is the identical arithmetic to the grass-casting null result in
+  // vegetation.js and to the creature contact band in creatures/materials.js. Concave
+  // occlusion at this scale has to be baked into the geometry that owns it.
+  //
+  // Two terms, both computed from the displacement that made the dent in the first
+  // place, so they cost no extra noise lookups:
+  //   bend — how far the shading normal has swung off the radial direction. On a convex
+  //          bulge the two agree (bend ~ 0); a crease between two lobes swings the
+  //          normal sideways and bend climbs. This is the real curvature signal.
+  //   sink — the displacement gain itself. A vertex pushed IN sits at the bottom of a
+  //          pocket and sees less of the sky than one pushed out.
   // ------------------------------------------------------------------
   const a = C(0x8e8e85), b = C(0xa9a597), warm = C(0xb2a893), c = new THREE.Color();
   for (let i = 0; i < n; i++) {
-    const y = p.getY(i);
+    const px = p.getX(i), py = p.getY(i), pz = p.getZ(i);
+    const y = py;
     const strata = noise.fbm(y * 5.2 + ph * 3.0, y * 1.7 - 2.2, 3);
-    const grain = noise.fbm(p.getX(i) * 5.5, p.getZ(i) * 5.5, 2);
+    const grain = noise.fbm(px * 5.5, pz * 5.5, 2);
     const up = clamp(nrm.getY(i), -1, 1);
     const ledge = clamp(up * 0.5 + 0.5, 0, 1);
+    const rl = Math.hypot(px, py, pz) || 1;
+    const bend = 1 - clamp((nrm.getX(i) * px + nrm.getY(i) * py + nrm.getZ(i) * pz) / rl, -1, 1);
+    const cav = clamp(bend * 1.45 + (1 - disp[i]) * 1.10, 0, 1);
     c.copy(a).lerp(b, clamp(0.5 + strata * 2.0, 0, 1));
     c.lerp(warm, ledge * 0.55);
-    const v = (0.80 + 0.30 * ledge) * (1 + 0.34 * strata + 0.18 * grain);
+    // 0.36 is the deepest a pocket goes. Past ~0.45 the creases read as painted black
+    // lines rather than as shade, which is the failure mode the bush decal had.
+    const v = (0.80 + 0.30 * ledge) * (1 + 0.34 * strata + 0.18 * grain) * (1 - 0.36 * cav);
     arr[i * 3] = c.r * v; arr[i * 3 + 1] = c.g * v; arr[i * 3 + 2] = c.b * v;
   }
   g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
@@ -86,6 +275,10 @@ export function createRocks(ctx, T, rng) {
   const noise = ctx.noise;
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
   applyMossShader(mat, 0x6b8a3a, { amount: 1.25 });
+  // Field stone: matte, but not lobe-less. Rough enough that the highlight is a wide
+  // wash across a facet rather than a dot, with a per-facet break so a boulder does not
+  // catch the key uniformly. See applyStoneSpecular.
+  applyStoneSpecular(mat, { rough: 0.66, spread: 0.24, f0: 0.045, gain: 1.0 });
   // rocks are sunk 0.30 of their radius, so their contact line is below the instance
   // origin — see applyContactShade for why this cannot go through the shadow map
   applyContactShade(mat, { rangeAbs: 0.10, rangeRel: 0.30, dark: 0.42, sinkRel: 0.30 });
@@ -184,10 +377,38 @@ export function createRuin(ctx, T, rng, cx, cz, scale = 1) {
         p.getZ(i) * (1 + 0.05 * noise.fbm(p.getX(i) * 3 - z, p.getY(i) * 3, 2)));
     }
     g.computeVertexNormals();
+    // ------------------------------------------------------------------
+    // THE COURSE JOINT. Same finding as the rock cavity above: a column here is a stack
+    // of five blocks and the seams between them are the only thing that says "masonry"
+    // rather than "an extruded box with a noise wobble". The seam is 2-4 cm of shadow
+    // — well under a shadow texel — so it is baked, per block, before the block is
+    // rotated into place, while its local frame still knows which way is up.
+    //
+    // Two terms, and the DOWN-FACE one is the load-bearing half. Darkening only the
+    // bottom band leaves the underside of the lintel and of every fallen block lit
+    // exactly as brightly as its top, which is the "single global illumination level"
+    // the critic named; a stone's underside sees no sky at all.
+    // ------------------------------------------------------------------
+    const ao = new Float32Array(p.count);
+    const nrm = g.attributes.normal;
+    for (let i = 0; i < p.count; i++) {
+      const t = clamp(p.getY(i) / h + 0.5, 0, 1);        // 0 at the block's foot, 1 at its head
+      const seam = 1 - smoothstep(0.0, 0.22, t);
+      const down = clamp(-nrm.getY(i), 0, 1);
+      ao[i] = 1 - 0.34 * seam - 0.30 * down;
+    }
     g.rotateZ(tilt);
     g.rotateY(ry);
     g.translate(x, y, z);
-    return paint(g, stone[rng.int(0, 2)], 0.09, noise);
+    // paint() writes the colour attribute from scratch, so the bake lands after it. The
+    // geometry is already non-indexed, so paint() does not re-order the vertices and the
+    // indices in `ao` still line up.
+    const out = paint(g, stone[rng.int(0, 2)], 0.09, noise);
+    const col = out.attributes.color.array;
+    for (let i = 0; i < ao.length; i++) {
+      col[i * 3] *= ao[i]; col[i * 3 + 1] *= ao[i]; col[i * 3 + 2] *= ao[i];
+    }
+    return out;
   };
 
   const baseY = T.heightAt(cx, cz);
@@ -219,6 +440,10 @@ export function createRuin(ctx, T, rng, cx, cz, scale = 1) {
   const geo = mergeGeos(parts);
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
   applyMossShader(mat, 0x62823a, { amount: 1.3 });
+  // Dressed stone is smoother than field stone — a cut face holds a tighter wash — but
+  // the block faces are large and flat, so the spread has to stay small or one whole
+  // face of a column lights differently from the one beside it.
+  applyStoneSpecular(mat, { rough: 0.54, spread: 0.12, f0: 0.045, gain: 1.0 });
   // the ruin is set 0.35 into the ground; without the occlusion band at that line the
   // columns read as blocks resting on a painted plane
   applyContactShade(mat, { rangeAbs: 0.55, rangeRel: 0, dark: 0.46, sinkAbs: 0.35 });

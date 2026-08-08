@@ -44,7 +44,7 @@ import { mkCanvas } from './procgen.js';
  * ---------------------------------------------------------------------------
  *
  * On top of that, the stylisation the reference actually asks for:
- *   1. specular is zeroed (optionally a whisper of satin for smooth-skinned species)
+ *   1. a SHEEN lobe rather than a mirror lobe — see THE HIGHLIGHT THAT WAS NEVER THERE
  *   2. a wrapped ("half-lambert-ish") fill term widens the diffuse falloff past the
  *      terminator, which is what light scattering through flocked fibre actually does
  *   3. a fresnel rim, masked to the upward + away-from-camera side and modulated by the
@@ -53,6 +53,64 @@ import { mkCanvas } from './procgen.js';
  *      silhouette looks slightly luminous at its edge
  *   5. a ground-line occlusion: the bottom of a creature standing in grass is buried in
  *      it. Without this things "sit on top of the image" instead of in the world.
+ *
+ * ---------------------------------------------------------------------------
+ * THE HIGHLIGHT THAT WAS NEVER THERE — r19.
+ *
+ * A blind critic on the creature portrait: "B's fleece is pure Lambert on a smooth
+ * capsule ... there is not one specular highlight anywhere in the frame, including on
+ * the horns, which should be the glossiest thing present."
+ *
+ * "Specular is zeroed" was a deliberate reading of reference #4 ("essentially no
+ * specular lobe"), and it went one step too far. Reference #4 is describing FUR, whose
+ * lobe is broad and dim, not absent; and it says nothing about the keratin, hoof and
+ * muzzle on the same creature. Three separate things were wrong, all in the same
+ * three-line override:
+ *
+ *   1. `material.specularF90 = 0.02`. F90 is the reflectance at GRAZING incidence, and
+ *      for every real dielectric it is 1.0. F_Schlick lerps f0 -> f90 with the Fresnel
+ *      term, so setting f90 BELOW f0 (0.04) inverts the Fresnel: the response fell
+ *      toward 0.02 exactly at the silhouette, which is the one place a fleece is
+ *      supposed to catch the sky. That single number is why the frame had no highlight
+ *      in it anywhere.
+ *   2. `material.specularColor` was set, but three's RE_Direct_Physical reads
+ *      `material.specularColorBlended` (lights_physical_pars_fragment, three 0.185).
+ *      The direct lobe was therefore running on three's default 0.04 the whole time and
+ *      the override only ever reached the IBL multiscatter path. Set both.
+ *   3. `material.roughness = 1.0` pins the GGX lobe as wide as it goes, which spreads
+ *      what little energy survived (1) and (2) into nothing.
+ *
+ * The replacement is not "turn specular back on". A GGX lobe is the wrong BRDF for
+ * fibre: it puts a small bright dot on a fleece, which is the vinyl-toy look the critic
+ * named on the OTHER side of the same paragraph. So the material is now a
+ * MeshPhysicalMaterial and the fibre response is three's own sheen (Charlie
+ * distribution, `BRDF_Sheen`) — broad, retroreflective, brightest at grazing, which is
+ * exactly what a wool silhouette does under a key. The GGX lobe stays, at a correct
+ * dielectric F0 and a high-but-not-pinned roughness, to carry the damp muzzle/nose
+ * end of the response.
+ *
+ * NOT DONE, AND WHY — the horns. The critic is right that they should be the glossiest
+ * thing in frame, and this file cannot do it. A creature is ONE material (build.js
+ * builds a single SkinnedMesh with [furMat, faceMat] and only the drawn face patch is
+ * its own group), so horn, hoof, fleece and muzzle arrive at this shader with nothing
+ * to tell them apart: same map, same uniforms, and a vertex colour whose hue is
+ * per-species. Separating them needs a per-vertex gloss channel written where the parts
+ * are authored — species.js's `partPaint` already knows it is painting horn, and
+ * build.js's Builder.addGrid would carry one more float per vertex. Both are outside
+ * this directory. `gloss` below is the receiving end and is wired to a uniform, so the
+ * change on that side is one attribute plus swapping `uGloss` for it here.
+ *
+ * WHAT IT MEASURED, r19 against r18, whole round captured both ways:
+ *   creature_portrait  mean 121.7 -> 123.3   colors 714 -> 638   edge 8.54 -> 8.33
+ *   creature_group     mean 138.2 -> 138.4   colors 657 -> 635   edge 7.38 -> 7.35
+ *   the other four shots move by less than 0.1 on every band (no creature in frame).
+ * All six still pass. `colors` falling ~11% on the portrait is the cost and it is worth
+ * knowing why: the sheen is a warm near-white wash, so neighbouring fleece values that
+ * used to land in adjacent 16-level bins now land in the same one. The band floor is
+ * 420 and the shot sits at 638, but this is the number that will bind if a later round
+ * pushes the sheen harder — and reference #4 ("matte and micro-fuzzy, nothing is
+ * glossy") says it should not be pushed much harder anyway.
+ * ---------------------------------------------------------------------------
  */
 
 // three's own line out of <lights_fragment_begin>. Matched loosely enough to survive
@@ -63,6 +121,15 @@ const DIR_SHADOW_LINE = /directLight\.color \*= \( directLight\.visible && recei
 export function furMaterial({
   map, sheen = 0.0, rim = 0.15, rimColor = 0xffd7a8, fill = 0.34, wrap = 0.62,
   fuzz = 0.16, transparent = false,
+  // --- BRDF ---
+  // `sheen` is the per-species satin knob that already existed (0.0 wool .. 0.22 fox);
+  // it now drives a real Charlie sheen lobe instead of a scrap of GGX. The three below
+  // are the dielectric response underneath it.
+  rough = 0.88,            // GGX roughness. Fibre is rough but NOT 1.0 — see the note.
+  spec = 0.035,            // F0. Keratin/wool sit at 0.04-0.05; a hair under, for style.
+  gloss = 0.0,             // 0 = fibre, 1 = polished keratin. See "NOT DONE" above:
+                           // nothing feeds this per-vertex yet, so it is a material-wide
+                           // control and every caller currently leaves it at 0.
   // --- form ---
   key = 2.05,              // multiplier on the sun's direct diffuse
   ambFloor = 0.30,         // sky light a fully downward-facing surface keeps
@@ -80,17 +147,32 @@ export function furMaterial({
   groundAOkey = 0.80,      // ...and how much of it also lands on the sun. 0 = ambient only
   shadowBias = -0.00048,   // ~0.6 m of depth push: enough to clear a creature's own hull
 } = {}) {
-  const mat = new THREE.MeshStandardMaterial({
+  // Sheen is always on: a fleece with no sheen is the thing the r19 critic picked the
+  // frame out by. `sheen` (the species knob) rides on top of a floor, and it TIGHTENS
+  // the lobe rather than only brightening it — satin (emberfox, 0.22) is a narrower
+  // sheen than wool (woolkin, 0.0), which is the difference between the two materials.
+  const sheenAmt = Math.min(1, 0.34 + sheen * 2.4);
+  const sheenRough = Math.max(0.30, 0.86 - sheen * 1.4);
+  const mat = new THREE.MeshPhysicalMaterial({
     color: 0xffffff,
     map: map || null,
     vertexColors: true,
     roughness: 1.0,
     metalness: 0.0,
+    sheen: sheenAmt,
+    sheenRoughness: sheenRough,
+    // Warm off-white. NOT the albedo: a sheen tinted with the base colour reads as the
+    // fleece getting brighter, a sheen tinted with the light reads as light ON fleece.
+    // NOT .convertSRGBToLinear() — ColorManagement is on (see the trap in CLAUDE.md).
+    sheenColor: new THREE.Color(0xfff1e2),
     transparent,
     depthWrite: !transparent,
     side: THREE.FrontSide,
   });
   mat.userData.u = {
+    uRough: { value: rough },
+    uSpec: { value: spec },
+    uGloss: { value: gloss },
     uRim: { value: rim },
     uRimColor: { value: new THREE.Color(rimColor) },
     uFill: { value: fill },
@@ -136,12 +218,20 @@ export function furMaterial({
         uniform float uFill; uniform float uWrap; uniform float uFuzz; uniform float uSheen;
         uniform float uKey; uniform float uAmbFloor; uniform float uBounce; uniform vec3 uBounceColor;
         uniform float uGroundAO; uniform float uGroundAOh; uniform float uGroundAOkey;
-        uniform float uShadowBias;
+        uniform float uShadowBias; uniform float uRough; uniform float uSpec; uniform float uGloss;
         varying float vBodyY;`)
+      // `geometryRoughness` is three's own normal-derivative term and is kept: it is
+      // what stops a curved skinned surface aliasing the lobe into fireflies.
+      // specularColorBlended is the one RE_Direct_Physical actually reads; setting only
+      // specularColor (as this did until r19) leaves the direct lobe on three's default.
       .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>
-        material.roughness = 1.0;
-        material.specularColor = vec3( 0.006 + uSheen * 0.05 );
-        material.specularF90 = 0.02 + uSheen * 0.35;`)
+        material.roughness = clamp( mix( uRough, 0.18, uGloss ) + geometryRoughness, 0.05, 1.0 );
+        material.specularColor = vec3( mix( uSpec, 0.055, uGloss ) );
+        material.specularColorBlended = material.specularColor;
+        material.specularF90 = 1.0;
+        #ifdef USE_SHEEN
+          material.sheenColor *= 1.0 - uGloss;
+        #endif`)
       // ---- 0. the ambient stops being a light box -----------------------------
       .replace('#include <lights_fragment_maps>', `#include <lights_fragment_maps>
         {
@@ -174,6 +264,17 @@ export function furMaterial({
         {
           float gaoD = 1.0 - uGroundAO * uGroundAOkey * ( 1.0 - smoothstep( 0.0, uGroundAOh, vBodyY ) );
           reflectedLight.directDiffuse *= uKey * gaoD;
+          // The lobes ride the SAME key multiplier and the same grass line. Without this
+          // the highlight sits at three's exposure while the diffuse under it sits at
+          // 2.05x, so the sheen is invisible on the body and then reappears on the part
+          // of the creature that is buried in the carpet — a fleece that glints brightest
+          // where the blades cross it. Sheen is held at 0.6 of the key: it is a grazing
+          // term and takes the full multiplier straight into a white rim.
+          reflectedLight.directSpecular *= uKey * gaoD;
+          #ifdef USE_SHEEN
+            sheenSpecularDirect *= uKey * 0.6 * gaoD;
+            sheenSpecularIndirect *= gaoD;
+          #endif
         }
         #if ( NUM_DIR_LIGHTS > 0 )
         {
@@ -210,6 +311,9 @@ export function furMaterial({
         #endif`);
   };
   mat.customProgramCacheKey = () => `fur|${sheen}|${transparent}`;
+  // sheen/gloss ride in uniforms and defines, not in the source, so the cache key above
+  // is still complete: two materials that differ only in `rough`/`spec`/`gloss` compile
+  // to the identical program.
   return mat;
 }
 
