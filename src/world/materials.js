@@ -397,7 +397,9 @@ export function makeAerialMaterial(opts = {}) {
         // HOW MUCH THIS IS WORTH IN THE SIX MATCHED SHOTS: almost nothing, and that is
         // a fact about the shots, not about the code. Measured with
         // tools/_grainprobe.mjs, which can drive these uniforms live: with the
-        // vista_golden camera staged verbatim, setting `visible = false` on every mesh
+        // vista_golden camera staged verbatim, setting visible=false on every mesh
+        // (NB: no backticks in this comment — it lives inside the fragmentShader
+        // template literal above, and one would terminate the string.)
         // carrying this material moves the far-range luminance band by 0.9 out of 168
         // and its sd by 0.6 out of 43. The skirt, the mesas and the tower are
         // essentially OCCLUDED from the valley floor by the ground mesh's own bowl rim
