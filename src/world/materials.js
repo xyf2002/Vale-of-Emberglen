@@ -238,6 +238,70 @@ export function makeNoiseTexture(seed, size = 256, freq = 5, octaves = 4, contra
   return tex;
 }
 
+/* ---------------------------------------------------- procedural surface grain */
+
+/**
+ * SURFACE GRAIN — the shared shader chunk behind "give the rock and the mountains a
+ * real material".
+ *
+ * The blind critic's #1 gap in r18: "No surface texture. Every material is one flat
+ * colour per polygon ... the mountains are untextured facets; the rocks are flat grey
+ * ... a shadow falling on the ground has nothing to fall ACROSS."
+ *
+ * Two decisions worth recording, because both had a cheaper-looking alternative that
+ * does not work here:
+ *
+ * 1. THIS IS 3D NOISE, NOT A TRIPLANAR-PROJECTED 2D MAP. The brief asked for
+ *    triplanar so detail does not stretch on slopes. A 3D field sampled at a WORLD
+ *    position has no projection at all, so there is nothing to stretch and no
+ *    blend weights to tune — and it costs LESS than triplanar, not more: triplanar
+ *    is three texture fetches plus a weighted sum per octave, this is one hash-based
+ *    lattice evaluation. It also needs no texture upload, no mip chain, and no
+ *    `ctx` — which matters because `makeAerialMaterial()` is called from props.js
+ *    with no seed in scope.
+ *
+ * 2. THE DETAIL IS MOSTLY A NORMAL PERTURBATION, NOT AN ALBEDO ONE. `measure.py`'s
+ *    `edge` band (mean |dLuma/dx| on a 320x180 downsample) has a two-sided ceiling of
+ *    10.0 and interaction_feed was already sitting at 9.44 before this change — high
+ *    frequency albedo noise is total variation per row and goes straight into that
+ *    number everywhere in the frame at once. A normal perturbation only cashes out
+ *    where the light grazes the surface, which is exactly where a real material shows
+ *    its grain, and it leaves the flat-lit interiors calm (reference #11).
+ *
+ * The bump uses screen-space derivatives of the procedural height, which is the same
+ * trick three's own bumpMap uses. That makes the perturbation resolution-independent
+ * but it also means an octave finer than ~4 px sparkles under camera motion, so every
+ * caller fades its fine octave out with distance. Do not remove those fades.
+ */
+export const SURFACE_GLSL = /* glsl */`
+  // Hoskins hash13 — no sin(), so it stays cheap under the software rasteriser the
+  // capture harness runs on (a sin-based hash measured +9 s per captured shot).
+  float sgHash_(vec3 p) {
+    p = fract(p * 0.1031);
+    p += dot(p, p.zyx + 31.32);
+    return fract((p.x + p.y) * p.z);
+  }
+  float sgNoise_(vec3 x) {
+    vec3 i = floor(x), f = fract(x);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(sgHash_(i),                 sgHash_(i + vec3(1,0,0)), f.x),
+                   mix(sgHash_(i + vec3(0,1,0)),   sgHash_(i + vec3(1,1,0)), f.x), f.y),
+               mix(mix(sgHash_(i + vec3(0,0,1)),   sgHash_(i + vec3(1,0,1)), f.x),
+                   mix(sgHash_(i + vec3(0,1,1)),   sgHash_(i + vec3(1,1,1)), f.x), f.y), f.z);
+  }
+  // Perturb a world-space normal by the screen-space gradient of a world-space height
+  // field h (in METRES). Same construction as three's perturbNormalArb.
+  vec3 sgBump_(vec3 wp, vec3 n, float h) {
+    vec3 sx = dFdx(wp), sy = dFdy(wp);
+    vec2 dH = vec2(dFdx(h), dFdy(h));
+    vec3 R1 = cross(sy, n), R2 = cross(n, sx);
+    float det = dot(sx, R1);
+    if (abs(det) < 1e-12) return n;
+    vec3 g = sign(det) * (dH.x * R1 + dH.y * R2);
+    return normalize(abs(det) * n - g);
+  }
+`;
+
 /* ------------------------------------------------------- aerial-perspective shader */
 
 /**
@@ -279,6 +343,22 @@ export function makeAerialMaterial(opts = {}) {
       // horizon's exposure (which the ground/sky ratio guardrail measures). Set it
       // with setAerialPivot() once the geometry exists.
       uPivot: { value: opts.pivot ?? 0.62 },
+      // ---- surface grain (see SURFACE_GLSL) -------------------------------
+      // Amplitude in METRES of the virtual relief the normal is bent by, at two
+      // world wavelengths. These are big numbers because the geometry they sit on is
+      // big: the skirt's own triangles are 25-40 m across at 1 km, so anything under
+      // ~10 m of relief is invisible before the haze even touches it.
+      //
+      // The measured budget: at 1920 px and 55 deg fov the frame carries
+      // 1920 / (2 d tan(27.5)) px per metre, so a 34 m feature is 23 px at 3 km and
+      // 65 px at 1 km — comfortably resolved. The 10 m octave is 6 px at 3 km, which
+      // is inside the sparkle range, hence uFineFar.
+      uCoarseA: { value: opts.coarse ?? 12.0 },  // metres of relief at ~34 m
+      uFineA: { value: opts.fine ?? 3.2 },       // metres of relief at ~10 m
+      uFineFar: { value: opts.fineFar ?? 1100 }, // metres at which the fine octave is gone
+      // Post-haze value break, riding the same restore path as uForm. Small: this is
+      // an albedo-ish term and albedo terms are what threaten the `edge` ceiling.
+      uStrata: { value: opts.strata ?? 0.17 },
     },
     vertexShader: /* glsl */`
       varying vec3 vN; varying vec3 vW; varying vec3 vC;
@@ -291,9 +371,47 @@ export function makeAerialMaterial(opts = {}) {
     fragmentShader: /* glsl */`
       uniform vec3 uFogS, uSun, uSunCol, uAmb, uBase;
       uniform float uNear, uFar, uMax, uDesat, uForm, uPivot, uDensity;
+      uniform float uCoarseA, uFineA, uFineFar, uStrata;
       varying vec3 vN; varying vec3 vW; varying vec3 vC;
+      ${SURFACE_GLSL}
       void main() {
         vec3 n = normalize(vN);
+        float dCam = length(vW - cameraPosition);
+        // ------------------------------------------------------------------
+        // THE UNTEXTURED FACET.
+        //
+        // The far ranges were the loudest remaining "greybox" tell: a 65x240 skirt
+        // grid subdivided from a smooth heightfield still hands the shader ONE
+        // interpolated normal per 25-40 m triangle, so every mountain flank shaded as
+        // a single flat value with a visible crease at each triangle edge. Vertex
+        // colour cannot fix that — the strat/bands/drift terms in buildSkirtGeometry
+        // are per-vertex too, so they break the COLOUR at the same resolution the
+        // crease appears at and the two just co-locate.
+        //
+        // Bending the normal by a world-space procedural height field is
+        // sub-triangle, and because the shading term it feeds is restored AFTER the
+        // haze (see uForm below), it survives the 85-90% aerial mix that flattens
+        // everything else about the far plane. The mountains stay pale and
+        // desaturated — reference #7 — but they stop being paper cutouts.
+        //
+        // HOW MUCH THIS IS WORTH IN THE SIX MATCHED SHOTS: almost nothing, and that is
+        // a fact about the shots, not about the code. Measured with
+        // tools/_grainprobe.mjs, which can drive these uniforms live: with the
+        // vista_golden camera staged verbatim, setting `visible = false` on every mesh
+        // carrying this material moves the far-range luminance band by 0.9 out of 168
+        // and its sd by 0.6 out of 43. The skirt, the mesas and the tower are
+        // essentially OCCLUDED from the valley floor by the ground mesh's own bowl rim
+        // (see analytic() in terrain.js). Winding a 300% albedo swing through uStrata
+        // from that camera is invisible for the same reason. Keep this — it is correct,
+        // it costs three noise lookups on 31k triangles, and it is what the ranges will
+        // look like the first time anything gets the camera above the rim — but do not
+        // expect a guardrail to move for it, and do not spend a round tuning it from
+        // vista_golden.
+        // ------------------------------------------------------------------
+        float fineFade = 1.0 - smoothstep(uFineFar * 0.55, uFineFar, dCam);
+        float sgH = uCoarseA * sgNoise_(vW * 0.0294)
+                  + uFineA * sgNoise_(vW * 0.101) * fineFade;
+        n = sgBump_(vW, n, sgH);
         float ndl = max(dot(n, normalize(uSun)), 0.0);
         float sky = 0.5 + 0.5 * n.y;
         vec3 base = uBase * vC;
@@ -301,7 +419,7 @@ export function makeAerialMaterial(opts = {}) {
         // the form term, kept aside so it can be re-applied on top of the haze below
         float form = ndl * 0.58 + sky * 0.42;
         float vLum = dot(vC, vec3(0.2126, 0.7152, 0.0722));
-        float d = length(vW - cameraPosition);
+        float d = dCam;
         // ------------------------------------------------------------------
         // THE FLOATING-VEGETATION SEAM.
         //
@@ -332,6 +450,12 @@ export function makeAerialMaterial(opts = {}) {
         // has already eaten the real shading, and centred on 1.0 so it changes contrast,
         // not exposure — the horizon's mean luminance is unchanged.
         c *= 1.0 + uForm * haze * ((form - 0.55) * 1.15 + (vLum / max(uPivot, 1e-4) - 1.0) * 1.30);
+        // Bedding courses. Purely a function of world HEIGHT, so the bands wrap the
+        // range the way strata do rather than blotching it (same reasoning as the
+        // rock geometry in props.js). Applied last, at low amplitude, because it is
+        // the only albedo-frequency term here and albedo frequency is what pushes the
+        // measure.py edge guardrail.
+        c *= 1.0 + uStrata * (sgNoise_(vec3(vW.x * 0.004, vW.y * 0.055, vW.z * 0.004)) - 0.5) * 2.0;
         gl_FragColor = vec4(max(c, vec3(0.0)), 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -388,6 +512,21 @@ export function syncAerial(mats, scene, sky) {
 /**
  * Rock shader hook: moss only on upward-facing surfaces (reference observation #8),
  * with a noisy, broken edge so it does not read as a clean gradient.
+ *
+ * It also carries the STONE GRAIN, because this function is the one place every rock
+ * surface in the world passes through — boulders and pebbles (props.js), field stones
+ * (vegetation.js) and the two ruins all call it. r18's blind critic: "the rocks are
+ * flat grey". The vertex-colour strata added in an earlier round work at the
+ * resolution of the rock's own facets, which is 20-40 cm on a 4 m boulder, so they
+ * broke facet from facet but left each facet a single value. Grain has to be
+ * sub-facet, and it has to be a surface property rather than a vertex one.
+ *
+ * Split deliberately:
+ *   - `bump` (default on) is a normal perturbation at 0.9 m and 0.22 m. Costs nothing
+ *     in `edge` on a flat-lit face and everything on a raking one, which is how stone
+ *     actually behaves.
+ *   - `grain` (default small) is the albedo half, kept low on purpose — see the note
+ *     on the `edge` ceiling in SURFACE_GLSL.
  */
 export function applyMossShader(mat, mossHex = 0x6d8a3c, opts = {}) {
   // NOT .convertSRGBToLinear(): ColorManagement is on, so `new THREE.Color(hex)` is
@@ -396,11 +535,15 @@ export function applyMossShader(mat, mossHex = 0x6d8a3c, opts = {}) {
   // grey stone -- "moss on stone" is one of the four material changes reference #8 asks
   // for across a single shot, and it was silently invisible.
   const moss = new THREE.Color(mossHex);
+  const bump = opts.bump ?? 1.0;
+  const grain = opts.grain ?? 1.0;
   mat.userData.moss = { value: new THREE.Vector3(moss.r, moss.g, moss.b) };
   mat.userData.mossAmt = { value: opts.amount ?? 1.0 };
+  mat.userData.rockGrain = { value: new THREE.Vector2(bump, grain) };
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uMoss = mat.userData.moss;
     sh.uniforms.uMossAmt = mat.userData.mossAmt;
+    sh.uniforms.uRockGrain = mat.userData.rockGrain;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying float vUpness;\nvarying vec3 vWPos;')
       .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
@@ -417,19 +560,41 @@ export function applyMossShader(mat, mossHex = 0x6d8a3c, opts = {}) {
         vWPos = (modelMatrix * wp_).xyz;`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        uniform vec3 uMoss; uniform float uMossAmt;
+        uniform vec3 uMoss; uniform float uMossAmt; uniform vec2 uRockGrain;
         varying float vUpness; varying vec3 vWPos;
         float h21_(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         float vn_(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
-          return mix(mix(h21_(i), h21_(i+vec2(1,0)), f.x), mix(h21_(i+vec2(0,1)), h21_(i+vec2(1,1)), f.x), f.y); }`)
+          return mix(mix(h21_(i), h21_(i+vec2(1,0)), f.x), mix(h21_(i+vec2(0,1)), h21_(i+vec2(1,1)), f.x), f.y); }
+        ${SURFACE_GLSL}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         {
           float nz = vn_(vWPos.xz * 0.55) * 0.6 + vn_(vWPos.xz * 1.9) * 0.4;
           float m = smoothstep(0.36, 0.80, vUpness + (nz - 0.5) * 0.55);
           m *= uMossAmt * smoothstep(0.0, 0.35, nz + 0.15);
           diffuseColor.rgb = mix(diffuseColor.rgb, uMoss * (0.75 + 0.5 * nz), clamp(m, 0.0, 1.0));
+          // stone grain, albedo half. 1.1 m mottle everywhere; 0.26 m speckle only in
+          // the near field, where it is 8+ px wide and cannot alias.
+          float rkNear = 1.0 - smoothstep(16.0, 46.0, length(vWPos - cameraPosition));
+          // Amplitudes picked off the live sweep in tools/_grainprobe.mjs, which
+          // rides uRockGrain from 0 to 4x on a 4.5 m boulder inside ONE boot: 0 is
+          // the flat-facet r18 rock, 2 is where the facet edges stop reading as
+          // edges, 4 starts to look like camouflage. 2.2x the first guess.
+          float rk = (sgNoise_(vWPos * 0.92) - 0.5) * 0.75
+                   + (sgNoise_(vWPos * 3.85) - 0.5) * 0.57 * rkNear;
+          diffuseColor.rgb *= 1.0 + rk * uRockGrain.y;
+        }`)
+      .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
+        {
+          // Stone grain, normal half. Amplitudes are metres of virtual relief: 34 cm
+          // over a 1.1 m wavelength, 11 cm over 26 cm. Weighted harder than the
+          // albedo half (3x the first guess against the albedo's 2.2x) for the reason
+          // in SURFACE_GLSL — this half is nearly free in the local-contrast band.
+          float bNear = 1.0 - smoothstep(16.0, 46.0, length(vWPos - cameraPosition));
+          float bh = 0.340 * sgNoise_(vWPos * 0.92)
+                   + 0.110 * sgNoise_(vWPos * 3.85) * bNear;
+          normal = sgBump_(vWPos, normal, bh * uRockGrain.x);
         }`);
   };
-  mat.customProgramCacheKey = () => 'moss' + (opts.amount ?? 1);
+  mat.customProgramCacheKey = () => `moss${opts.amount ?? 1}_${bump}_${grain}`;
   return mat;
 }

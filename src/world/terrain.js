@@ -202,6 +202,12 @@ export function createTerrain(ctx) {
       // carries the bald spots you can actually see from the player's eye.
       const patch = noise.fbm(x * 0.017 + 33, z * 0.017 - 12, 3);
       const near = noise.fbm(x * 0.098 + 5, z * 0.098 - 41, 2);
+      // ~24 m. This one feeds `bare` ONLY — see below. It is the critic's "macro
+      // ~20 m dirt/grass patchiness across the meadow", and it is deliberately kept
+      // out of `cover` and `dirt`: those two drive blade density, tuft scatter,
+      // flower gating, footstep material and the trail biome, so putting a new
+      // octave into them would change gameplay and vegetation to buy a texture.
+      const wear = noise.fbm(x * 0.0415 - 66, z * 0.0415 + 28, 2);
       const bald = clamp(smoothstep(0.16, 0.40, patch) + smoothstep(0.30, 0.62, near) * 0.55, 0, 1);
       const scuff = smoothstep(0.30, 0.56, noise.fbm(x * 0.062 - 8, z * 0.062 + 3, 2));
 
@@ -221,7 +227,17 @@ export function createTerrain(ctx) {
       dirt[j * CN + i] = Math.round(clamp(d, 0, 1) * 255);
       // trodden earth: the path itself, the shoreline, and only the very baldest
       // scuffs — never the broad thin-grass patches
-      const b = clamp(onPath * 0.95 + shore * 0.85 + smoothstep(0.72, 1.00, bald) * 0.55 + scuff * bald * 0.20, 0, 1);
+      // `wear` puts worn earth INTO standing grass at the 24 m scale. The blades stay
+      // (cover is untouched), so what the shader draws is soil seen between them —
+      // reference #8's "dense variegated carpet with deliberate bald spots" rather
+      // than a bald spot. Held to 0.42 on purpose: an earlier round turned half the
+      // meadow into a mud flat by painting thin grass as soil, and the fix for that
+      // was inventing this `bare` field in the first place. This is the largest term
+      // in the frame that survives to 400 m, because it is a MATERIAL change carried
+      // on a vertex attribute rather than a texture lookup that mips to its own mean.
+      const b = clamp(onPath * 0.95 + shore * 0.85 + smoothstep(0.72, 1.00, bald) * 0.55
+                      + scuff * bald * 0.20
+                      + smoothstep(0.10, 0.46, wear) * 0.16 * (1 - shore), 0, 1);
       bare[j * CN + i] = Math.round(b * 255);
     }
   }
@@ -299,6 +315,23 @@ export const PAL = {
  */
 export function buildGroundMesh(ctx, T, radius, segs) {
   const noise = ctx.noise;
+  // ---------------------------------------------------------------------------
+  // WHY THIS MESH IS FINER THAN IT WAS ASKED TO BE.
+  //
+  // Everything this function can contribute to surface detail is per-VERTEX, so the
+  // finest wavelength it can carry is about four vertex spacings. At the caller's
+  // 250 segments over 920 m that spacing is 3.68 m and the floor is ~15 m — macro
+  // only, no meso, which is precisely half of what r18's blind critic asked for
+  // ("macro ~20 m patchiness AND meso ~2-6 m"). The other half, a per-fragment
+  // octave, lives in the ground shader in src/world/index.js, which is outside this
+  // directory's remit this round.
+  //
+  // 1.5x brings the spacing to 2.45 m (capture) / 1.92 m (high) and the floor to
+  // ~8 m. Measured cost on the capture tier: +164k triangles on a scene already
+  // drawing 1.9M, one draw call, no extra material. Capped so the high tier does not
+  // pay 630k triangles for a heightfield.
+  // ---------------------------------------------------------------------------
+  segs = Math.min(480, Math.round(segs * 1.5));
   const geo = new THREE.PlaneGeometry(radius * 2, radius * 2, segs, segs);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position;
@@ -317,18 +350,70 @@ export function buildGroundMesh(ctx, T, radius, segs) {
     const dryness = smoothstep(-0.22, 0.30, noise.fbm(x * 0.0085 + 61, z * 0.0085 - 19, 3));
     const moist = smoothstep(14, 4, h) * 0.6 + smoothstep(0.30, -0.15, noise.fbm(x * 0.012 - 4, z * 0.012 + 27, 3)) * 0.4;
     const patch = smoothstep(-0.28, 0.28, noise.fbm(x * 0.026 + 91, z * 0.026 + 43, 3));
+    // ---------------------------------------------------------------------
+    // THE MID-GROUND HILLSIDE, AND WHY IT WAS FLAT WHILE THE SHADER SAID IT
+    // WAS NOT.
+    //
+    // The ground fragment shader (src/world/index.js) samples a 256px mask at
+    // 140/23/9.2/4.3/1.15 m and does have real patch structure in it. But it
+    // gets there through texture2D, and past ~80 m the texel footprint of the
+    // 4-23 m lookups covers most of a mip level, so the sampler returns the
+    // MEAN of the field. Every mask-driven term therefore converges to a
+    // constant exactly where the critic was looking: "the mid-ground hillside
+    // and every mountain facet are flat single-value surfaces". That is not a
+    // bug in the shader; it is what mipmapping is for.
+    //
+    // Vertex colour does not mip. These two octaves are the only detail on the
+    // ground that survives to 400 m, which is why they are here and not in the
+    // shader. 26 m is the critic's macro band; 9 m is as fine as this mesh's
+    // vertex spacing can carry (see the segs note above).
+    // ---------------------------------------------------------------------
+    const meso = noise.fbm(x * 0.0385 + 17.3, z * 0.0385 - 44.1, 2);
+    const fine = noise.fbm(x * 0.112 - 3.7, z * 0.112 + 21.5, 2);
 
     // thin cover means more straw and exposed root showing through, not bare earth
-    c.copy(PAL.lush).lerp(PAL.dry, clamp(dryness * 0.90 + patch * 0.24 + d * 0.34, 0, 1));
-    c.lerp(PAL.shade, clamp(moist, 0, 1) * 0.48 + (1 - patch) * 0.22);
+    c.copy(PAL.lush).lerp(PAL.dry, clamp(dryness * 0.90 + patch * 0.24 + d * 0.34
+                                         + meso * 0.72 + fine * 0.30, 0, 1));
+    c.lerp(PAL.shade, clamp(moist, 0, 1) * 0.48 + (1 - patch) * 0.22
+                      + clamp(-meso * 0.82 - fine * 0.34, 0, 0.38));
     // a stony/olive family on the drier high shoulders, so the landscape is not two
     // hues wide -- the plates render 800-1600 distinct quantised colours where a
     // meadow of one green renders 400
     c.lerp(PAL.rockWarm, smoothstep(0.55, 0.95, dryness) * (1 - moist) * 0.30);
     c.lerp(PAL.high, smoothstep(48, 92, h) * 0.7);
 
-    // broad value break-up centred on 1.0
-    const v = 1.0 + 0.16 * noise.fbm(x * 0.006, z * 0.006, 2);
+    // Broad value break-up centred on 1.0, now with the 26 m and 9 m octaves on top.
+    //
+    // MEASURED, and this is the most useful number in the file for whoever picks the
+    // ground up next. Sampling a 450x270 px patch of the mid-ground hillside in
+    // vista_golden, the luminance spread this term buys is:
+    //
+    //     coefficients        hillside sd
+    //     none (r18 base)        12.92
+    //     0.55 / 0.30            13.31   (+3%)
+    //     2.20 / 1.20            15.95   (+24%)
+    //
+    // Four times the amplitude bought a quarter more contrast: the response is
+    // heavily damped and the damping is NOT here. On a slope the ground shader in
+    // src/world/index.js hands 88% of the fragment to `rock`, which is built entirely
+    // from uniforms and from uMask lookups — and past ~80 m those lookups mip to
+    // their own mean. Vertex colour is diluted to a few per cent of the result before
+    // the fog gets to it. The mid-ground hillside cannot be un-flattened from this
+    // file; it needs the rock branch of that shader to carry a distance-stable term.
+    //
+    // AND THE NEAR FIELD PAYS FOR THE FAR FIELD, WHICH IS WHY THE CLAMP IS HERE.
+    // Vertex colour is view-independent, so buying mid-ground contrast this way also
+    // multiplies the ground three metres from the lens. At 1.30/0.70 the upward
+    // excursions landed on the shader's straw term (`grass * vec3(1.44, 1.14, 0.44)`)
+    // and creature_portrait's soil went hot chartreuse — measured, the ground/sky
+    // ratio went 0.94 -> 0.98 against a 0.96 ceiling on that term alone, and it was
+    // ugly before it was out of band. The band caught a real regression.
+    //
+    // So: half the amplitude, and a hard asymmetric clamp. The ceiling is tighter
+    // than the floor on purpose — a dark patch of meadow reads as damp ground, a
+    // bright one reads as a rendering fault.
+    const v = clamp(1.0 + 0.16 * noise.fbm(x * 0.006, z * 0.006, 2)
+                        + 0.55 * meso + 0.28 * fine, 0.72, 1.10);
     colAttr[i * 3] = c.r * v; colAttr[i * 3 + 1] = c.g * v; colAttr[i * 3 + 2] = c.b * v;
 
     const shore = smoothstep(2.2, -0.6, h - T.waterLevel) * smoothstep(LAKE.r + 24, LAKE.r - 8, Math.hypot(x - LAKE.x, z - LAKE.z));
@@ -340,8 +425,100 @@ export function buildGroundMesh(ctx, T, radius, segs) {
   geo.setAttribute('color', new THREE.BufferAttribute(colAttr, 3));
   geo.setAttribute('aMask', new THREE.BufferAttribute(maskAttr, 4));
   geo.computeVertexNormals();
+  perturbGroundNormals(geo, noise);
   geo.computeBoundingSphere();
   return geo;
+}
+
+/**
+ * SHADING RELIEF THE COLLIDER NEVER SEES.
+ *
+ * "A shadow falling on the ground has nothing to fall ACROSS" was the closing line of
+ * r18's #1 critique, and it is a statement about NORMALS, not about albedo. Our meadow
+ * shades on one interpolated normal per 2-4 m, so under a 16 degree key the whole
+ * hollow returns the same N.L and reads as a painted sheet regardless of how much
+ * colour variation is on it.
+ *
+ * Three things make this the right knob rather than displacing the mesh:
+ *
+ *  - AMPLIFICATION AT A GRAZING SUN. At 16 degrees elevation flat ground returns
+ *    sin(16) = 0.276 of the key. Tilting the normal by 3 degrees swings that to
+ *    sin(13)..sin(19) = 0.225..0.326, a +/-18% swing in the sunlit term for a tilt you
+ *    cannot see in the silhouette. Nothing else available here buys that much shading
+ *    variation that cheaply, and at noon it correctly fades to almost nothing.
+ *  - IT COSTS ALMOST NOTHING IN `edge`. A normal perturbation modulates only the
+ *    direct term, so flat-lit ground and shadowed ground stay calm. Adding the same
+ *    contrast as albedo would have raised local contrast everywhere in the frame at
+ *    once, and interaction_feed had 0.56 of headroom under the 10.0 ceiling.
+ *  - THE COLLIDER IS UNTOUCHED. heightAt() is the single source of truth for physics,
+ *    creature placement and prop sinking; displacing the render mesh by even 20 cm
+ *    would float or bury every one of them. Bending the normal changes shading only.
+ *
+ * NEGATIVE RESULT worth keeping: doing this per-vertex caps the wavelength at ~4x the
+ * vertex spacing (~8 m here). Finer relief has to be a fragment-shader bump off the
+ * screen-space derivative — see sgBump_() in materials.js, which is how the rock and
+ * the far ranges get theirs. The ground's fragment shader is in src/world/index.js.
+ *
+ * THE MOUNTAINS IN vista_golden ARE THIS MESH. Measured with tools/_grainprobe.mjs by
+ * setting `visible = false` on every mesh carrying an aerial material and re-rendering
+ * the vista_golden camera: the far-range luminance band moved by 0.9 out of 168 and its
+ * sd by 0.6 out of 43. The skirt, the mesas and the tower are almost entirely OCCLUDED
+ * in that shot. What reads as "the mountain range" is the ground mesh's own bowl rim
+ * (`rim` in analytic(), +52..130 m at r 280-470) seen at 300-450 m. So the shot's
+ * mountains are shaded by the ground shader and by these normals, and any amount of
+ * work on makeAerialMaterial is invisible there. That cost half a round to find; do not
+ * re-derive it.
+ */
+function perturbGroundNormals(geo, noise) {
+  const pos = geo.attributes.position;
+  const nrm = geo.attributes.normal;
+  // Metres of virtual relief per octave.
+  //
+  // MEASURED, and worth recording because the first pass was far too timid to be
+  // worth its complexity: at A1 0.42 / A2 0.13 (a ~3 degree peak tilt) the whole
+  // change moved `edge` on vista_golden by -0.07 and on interaction_feed by +0.01,
+  // i.e. nothing. Do not assume a normal perturbation is expensive in the guardrails
+  // just because an albedo one is; it is roughly 8x cheaper per unit of visible
+  // relief, so it has to be authored 2-3x louder than instinct says.
+  //
+  // NEGATIVE RESULT, removed rather than shipped. A third octave was added here to
+  // give the bowl rim — which is what reads as "the mountain range" in vista_golden,
+  // see above — some talus form: 3.2 m of relief at a 70 m wavelength, gated on
+  // smoothstep(0.16, 0.44, slopeAt) so it could not re-tilt the starting meadow.
+  //
+  //     A0 = 3.2, F0 = 0.0143, slope-gated
+  //     result: 0.05% of vista_golden pixels moved by more than 2 levels;
+  //             mid-range luminance sd 39.96 -> 39.96, gx 0.749 -> 0.749.
+  //
+  // It is not that the octave was too small. Those slopes are 300-450 m away, where
+  // FogExp2 has already taken half the signal, and they are the AVERTED faces — the
+  // key contributes almost nothing there, and a normal perturbation can only modulate
+  // what the key delivers. Bending normals is a grazing-sun tool and the rim is not
+  // grazed; it is shadowed. Anything that is going to give the far rim form has to be
+  // albedo or geometry, not shading.
+  const A1 = 0.95, F1 = 0.0385;   // ~26 m
+  const A2 = 0.30, F2 = 0.112;    // ~9 m
+  const relief = (x, z) => A1 * noise.fbm(x * F1 + 17.3, z * F1 - 44.1, 2)
+                         + A2 * noise.fbm(x * F2 - 3.7, z * F2 + 21.5, 2);
+  // Central difference at roughly the vertex spacing: sampling finer than the mesh can
+  // represent gives neighbouring vertices uncorrelated normals, which is faceting, not
+  // relief.
+  const e = 2.2;
+  const inv = 1 / (2 * e);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i);
+    const gx = (relief(x + e, z) - relief(x - e, z)) * inv;
+    const gz = (relief(x, z + e) - relief(x, z - e)) * inv;
+    // The perturbed normal of a heightfield h + relief is (-dh/dx, 1, -dh/dz); adding
+    // the relief gradient into the existing normal's tangent plane is the same thing
+    // to first order and preserves whatever slope the terrain already had.
+    let nx = nrm.getX(i) - gx * nrm.getY(i);
+    let ny = nrm.getY(i);
+    let nz = nrm.getZ(i) - gz * nrm.getY(i);
+    const l = Math.hypot(nx, ny, nz) || 1;
+    nrm.setXYZ(i, nx / l, ny / l, nz / l);
+  }
+  nrm.needsUpdate = true;
 }
 
 /** Low-res ring carrying the landscape from the playable rim out to the horizon. */
